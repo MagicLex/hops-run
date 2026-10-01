@@ -1,12 +1,16 @@
-// jevworks pilot: flies the live Hops Run page in a headless Chromium, run after run, forever.
-// Each move comes from the semif deployment of this Hopsworks project, read from what the page
-// shows (the lane, the rows ahead); each finished run is posted to the game's board as the
-// jevworks pilot. When the game ships a new version the page is reloaded, so the pilot always
+// Model pilot: flies the live Hops Run page in a headless Chromium, run after run, forever. Each
+// move comes from a decision model reading what the page shows (the lane, the rows ahead): the
+// semif deployment of this Hopsworks project (pilot jevworks) or TypeSafe's Jev API (pilot jev).
+// Each finished run is posted to the game's board under that pilot. When the game ships a new version the page is reloaded, so the pilot always
 // flies what players fly. With a stream key, the page is also streamed live (e.g. to YouTube).
 //
 // Settings: config.json next to this file (written by deploy.py), overridden by env:
 //   GAME_URL      the game, e.g. https://game.hopsworks.ai/
-//   SEMIF_URL     path-routed predict URL of the semif deployment
+//   DECIDER       semif (pilot jevworks, the default) or jev (pilot jev)
+//   SEMIF_URL     path-routed predict URL of the semif deployment, for semif
+//   JEV_URL       TypeSafe System One endpoint, e.g. https://api.typesafe.ai/v1/systemone, for jev
+//   JEV_MODEL     TypeSafe model, e.g. jev-latest, for jev
+//   TYPESAFE_API_KEY  TypeSafe API key, for jev
 //   VIEWPORT      page size, e.g. 1920x1080
 //   GPU           "true": render on the pod's GPU (Vulkan); otherwise SwiftShader on the CPU
 //   PILOT_TOKEN   bearer token the game accepts pilot runs with (start.sh reads it from a secret)
@@ -26,7 +30,11 @@ const file = new URL('config.json', import.meta.url);
 const stored = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
 const cfg = {
   gameUrl: process.env.GAME_URL ?? stored.gameUrl,
+  decider: process.env.DECIDER ?? stored.decider ?? 'semif',
   semifUrl: process.env.SEMIF_URL ?? stored.semifUrl,
+  jevUrl: process.env.JEV_URL ?? stored.jevUrl,
+  jevModel: process.env.JEV_MODEL ?? stored.jevModel,
+  jevKey: process.env.TYPESAFE_API_KEY,
   viewport: process.env.VIEWPORT ?? stored.viewport,
   gpu: String(process.env.GPU ?? stored.gpu) === 'true',
   token: process.env.PILOT_TOKEN,
@@ -37,8 +45,11 @@ const cfg = {
   apiKey: process.env.HOPSWORKS_API_KEY,
   jwt: process.env.SECRETS_DIR && `${process.env.SECRETS_DIR}/token.jwt`,
 };
-const missing = ['gameUrl', 'semifUrl', 'viewport', 'token', 'port'].filter((k) => !cfg[k]);
-if (!cfg.apiKey && !cfg.jwt) missing.push('HOPSWORKS_API_KEY or SECRETS_DIR');
+const DECIDERS = { semif: { pilot: 'jevworks', needs: ['semifUrl'] }, jev: { pilot: 'jev', needs: ['jevUrl', 'jevModel', 'jevKey'] } };
+if (!DECIDERS[cfg.decider]) throw new Error(`DECIDER: one of ${Object.keys(DECIDERS).join(', ')}`);
+const PILOT = DECIDERS[cfg.decider].pilot;
+const missing = ['gameUrl', 'viewport', 'token', 'port', ...DECIDERS[cfg.decider].needs].filter((k) => !cfg[k]);
+if (cfg.decider === 'semif' && !cfg.apiKey && !cfg.jwt) missing.push('HOPSWORKS_API_KEY or SECRETS_DIR');
 if (cfg.streamKey && (!cfg.streamUrl || !cfg.ffmpeg)) missing.push('STREAM_URL and FFMPEG, for STREAM_KEY');
 if (missing.length) throw new Error(`missing setting: ${missing.join(', ')}`);
 const [width, height] = cfg.viewport.split('x').map(Number);
@@ -67,7 +78,7 @@ function row({ lane, airborne, ahead }) {
 
 const stats = { runs: 0, best: 0, last: null, model: null, version: null, renderer: null, stream: cfg.streamKey ? 'starting' : 'off', streamRestarts: 0, lastDecision: Date.now() };
 
-async function decide(state) {
+async function decideSemif(state) {
   const res = await fetch(cfg.semifUrl, {
     method: 'POST',
     headers: { Authorization: auth(), 'Content-Type': 'application/json' },
@@ -79,8 +90,27 @@ async function decide(state) {
   const [p] = JSON.parse(text).predictions;
   stats.lastDecision = Date.now();
   stats.model = String(p.model.revision ?? '').replace(/^hopsworks:/, '');
-  return { moves: p.option_ids, probabilities: p.probabilities, forwardMs: p.forward_seconds * 1000, model: stats.model };
+  return { pilot: PILOT, moves: p.option_ids, probabilities: p.probabilities, forwardMs: p.forward_seconds * 1000, model: stats.model };
 }
+
+// Jev answers the same decision as one Choice question: the options are the criteria. It reports
+// no forward time, so the round trip stands in.
+async function decideJev(state) {
+  const { state: text, question, options } = row(state), t0 = performance.now();
+  const res = await fetch(cfg.jevUrl, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${cfg.jevKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: cfg.jevModel, state: text, questions: { move: { type: 'choice', instructions: question, criteria: Object.fromEntries(options.map((o) => [o.id, o.description])) } } }),
+    signal: AbortSignal.timeout(5000),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`jev: HTTP ${res.status} ${body.slice(0, 200)}`);
+  const d = JSON.parse(body), moves = options.map((o) => o.id);
+  stats.lastDecision = Date.now();
+  stats.model = d.model;
+  return { pilot: PILOT, moves, probabilities: moves.map((m) => d.answers.move.probabilities[m] ?? 0), forwardMs: performance.now() - t0, model: d.model };
+}
+const decide = { semif: decideSemif, jev: decideJev }[cfg.decider];
 
 // --- runs ----------------------------------------------------------------------------------------
 const gameVersion = async () => (await (await fetch(new URL('health', cfg.gameUrl), { signal: AbortSignal.timeout(5000) })).json()).version;
@@ -90,7 +120,7 @@ async function finished(run) {
   const res = await fetch(new URL('api/runs', cfg.gameUrl), {
     method: 'POST',
     headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'jevworks', pilot: 'jevworks', model: stats.model, ...run }),
+    body: JSON.stringify({ name: PILOT, pilot: PILOT, model: stats.model, ...run }),
     signal: AbortSignal.timeout(10_000),
   });
   const d = await res.json().catch(() => ({ error: `game: HTTP ${res.status}` }));
@@ -142,25 +172,25 @@ function stream(page) {
     await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: width, maxHeight: height });
   })().catch((e) => console.error(`stream: ${e.message}`));
   // On SIGTERM ffmpeg finishes its output and can block there on the network, holding the
-  // ingest: a stream that has not exited 5 s later is killed.
-  return () => {
+  // ingest: a stream that has not exited 5 s later is killed, at once when the pilot exits.
+  return (now = false) => {
     stopped = true; stats.stream = 'off';
     cdp?.detach().catch(() => {});
     if (!ff || ff.exitCode !== null) return;
     const dead = ff;
+    if (now) return dead.kill('SIGKILL');
     dead.stdin.end(); dead.kill('SIGTERM');
     setTimeout(() => { if (dead.exitCode === null && dead.signalCode === null) dead.kill('SIGKILL'); }, 5000);
   };
 }
 
 // --- browser -------------------------------------------------------------------------------------
-let current = null; // the page being flown, for /frame.jpg
+let current = null, stopStream = null; // the page being flown (for /frame.jpg), its stream
 async function fly() {
   const args = cfg.gpu
     ? ['--use-angle=vulkan', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--enable-gpu']
     : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
   const browser = await chromium.launch({ args });
-  let stopStream = null;
   try {
     const page = current = await browser.newPage({ viewport: { width, height } });
     page.on('pageerror', (e) => console.error(`page error: ${e.message}`));
@@ -188,7 +218,7 @@ async function fly() {
       await page.waitForTimeout(3000);
     }
   } finally {
-    stopStream?.();
+    stopStream?.(); stopStream = null;
     await browser.close().catch(() => {});
   }
 }
@@ -203,7 +233,13 @@ createServer(async (req, res) => {
   const ok = req.url === '/health' && Date.now() - stats.lastDecision < WATCHDOG_MS;
   res.writeHead(ok || req.url !== '/health' ? 200 : 503, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ status: ok ? 'ok' : 'stalled', ...stats, lastDecision: new Date(stats.lastDecision).toISOString() }));
-}).listen(cfg.port, '0.0.0.0', () => console.log(`jevworks pilot health on :${cfg.port}`));
+}).listen(cfg.port, '0.0.0.0', () => console.log(`${PILOT} pilot (${cfg.decider}) health on :${cfg.port}`));
+
+// A stop (SIGTERM, SIGINT) ends the pilot: Playwright closes the browser on these signals, and the
+// loop below would otherwise take that for a lost browser and relaunch it.
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, () => { console.log(`${signal}: stopping`); stopStream?.(true); process.exit(0); });
+}
 
 // Run for ever: a lost page or browser is relaunched after a pause.
 for (;;) {

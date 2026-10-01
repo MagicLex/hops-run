@@ -45,6 +45,8 @@ Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so deci
 
 `pilot/` flies the live game for ever: a Hopsworks App on `lex-gpu` (project `jevworks`) runs the page in a headless Chromium rendering on a GPU, asks the `semif4b` deployment for every move, and posts each run to the board as `jevworks`. The page shows the decision (move probabilities, forward time, run number, best). When the game ships a new version the pilot reloads the page between runs.
 
+`DECIDER=jev` flies the same runner with TypeSafe's Jev API (one Choice question per move, pilot `jev`) instead of semif; it reads `JEV_URL`, `JEV_MODEL` and `TYPESAFE_API_KEY`.
+
 The page enters pilot mode only when the runner exposes `jevworksDecide` and `jevworksFinished`; players never see it. The token lives in the Hopsworks secret `jevworks_pilot_token` of the deploying user; the game holds its sha256 in `PILOT_TOKEN_SHA256`.
 
 ```sh

@@ -641,10 +641,9 @@ function crash(row, hitMesh) {
     if (!PILOT) showLive(true);
     ui.prompt.querySelector('h1').textContent = `${lastRun.distance} m`;
     if (PILOT) { result.hidden = false; ui.prompt.hidden = false; return; }
-    result.hidden = false; result.textContent = 'Put your run on the board';
+    result.hidden = false; result.textContent = 'Enter: add to board · Space: fly again';
     form.hidden = false;
     ui.prompt.hidden = false;
-    nameInput.focus();
   }, 900);
 }
 
@@ -665,9 +664,14 @@ function steer(move) {
 
 addEventListener('keydown', (e) => {
   seat.active = true;
-  if (document.activeElement === nameInput) return; // typing a name
+  if (document.activeElement === nameInput) { // typing a name; Escape leaves the field
+    if (e.code === 'Escape') nameInput.blur();
+    return;
+  }
   if (mode !== 'flying') {
     if (e.code === 'Space') { e.preventDefault(); if (seat.state === 'gone') joinSeat(); else start(); }
+    // After a crash, Enter puts the run on the board: straight away with a saved name, else via the field.
+    if (e.code === 'Enter' && lastRun && !submitted && !form.hidden) { e.preventDefault(); if (nameInput.value.trim()) form.requestSubmit(); else nameInput.focus(); }
     return;
   }
   if (e.code === 'ArrowLeft' || e.code === 'KeyA') steer('left');
@@ -757,10 +761,10 @@ joinSeat();
 const LEAD = { up: 0.3, down: 0.25 }, RESTART_MS = 4000;
 const mind = document.getElementById('mind'), pilotEl = document.getElementById('pilot');
 const moveEls = Object.fromEntries([...mind.querySelectorAll('.move')].map((el) => [el.dataset.move, el]));
-const pilot = { asking: false, armed: null, restartAt: 0, model: '', record: '' };
+const pilot = { asking: false, armed: null, restartAt: 0, name: '', model: '', record: '' };
 const clean = (text) => String(text).replace(/[<>&]/g, '');
 function showPilot(timing = '') {
-  pilotEl.textContent = ['jevworks', pilot.model, pilot.record, timing].filter(Boolean).join(' · ');
+  pilotEl.textContent = [pilot.name, pilot.model, pilot.record, timing].filter(Boolean).join(' · ');
 }
 async function ask() {
   if (pilot.asking || mode !== 'flying') return;
@@ -776,7 +780,7 @@ async function ask() {
       el.querySelector('i').style.width = i < 0 ? '0' : `${(d.probabilities[i] * 100).toFixed(1)}%`;
       el.querySelector('.p').textContent = i < 0 ? '-' : d.probabilities[i].toFixed(2);
     }
-    pilot.model = d.model;
+    pilot.name = d.pilot; pilot.model = d.model;
     showPilot(`${d.forwardMs.toFixed(0)} ms`);
     if (mode === 'flying') {
       const next = rows.find((r) => !r.cleared && r.s > s);
