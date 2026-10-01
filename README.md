@@ -25,7 +25,7 @@ PORT=8811 DATABASE_URL=postgres://hops_run:...@localhost:5432/hops_run npm start
 | `GET /` | The game, with the leaderboard rendered in the page |
 | `GET /api/board` | `{ runs, html }`: the top runs, and the same rows as rendered on the page |
 | `POST /api/runs` | `{ name, distance, durationMs }` adds a run, returns `{ id, rank, runs, html }` |
-| `GET /health` | `ok` when the database answers |
+| `GET /health` | `{ status, version }` when the database answers |
 
 A run is refused when its name is not 1 to 20 letters, digits, spaces, dots, dashes or underscores, or when its distance is more than top speed plus a full boost over its duration. Each client address may add 6 runs a minute.
 
@@ -33,12 +33,16 @@ Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so deci
 
 ## Deploy
 
-On `crm-hops`, in the GTM stack (`/home/debian/stack`): services `hops-run` (built from `./hops-run`, synced from this repo) and `hops-run-db` (`postgres:16`, volume `hops-run-db-data`, password `HOPS_RUN_PG_PASSWORD` in `.env`). Caddy serves it publicly at `https://hops.io/run/`, stripping the `/run` prefix. `hopsworks.ai/run` is a rewrite in the `hopsworks-web` site to that address.
+On `crm-hops`, in the GTM stack (`/home/debian/stack`): services `hops-run` (built from `./hops-run`, synced from this repo) and `hops-run-db` (`postgres:16`, volume `hops-run-db-data`, password `HOPS_RUN_PG_PASSWORD` in `.env`). Caddy serves it publicly at `https://game.hopsworks.ai/run/`, stripping the `/run` prefix. `hopsworks.ai/run` is a rewrite in the `hopsworks-web` site to that address.
 
 ```sh
 tar --no-mac-metadata --exclude node_modules --exclude .git -czf - . | ssh crm-hops 'rm -rf stack/hops-run && mkdir stack/hops-run && tar xzf - -C stack/hops-run'
 ssh crm-hops 'cd /home/debian/stack && docker compose up -d --build hops-run'
 ```
+
+## Versions
+
+The game version is `version` in `package.json`, tagged `v<version>` in git. It shows in the HUD and is stored with every run (`game_version`), so runs from before and after a change to the track or the physics stay distinguishable on the board. Bump it for any change that affects how far a run can go.
 
 ## Controls
 

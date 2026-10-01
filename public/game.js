@@ -609,8 +609,9 @@ form.addEventListener('submit', async (e) => {
   form.querySelector('button').disabled = true;
   try {
     const res = await fetch('api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ...lastRun }) });
-    const d = await res.json();
-    if (!res.ok) throw new Error(d.error);
+    // Anything in front of the game (a proxy, a login) may answer with something other than JSON.
+    const d = await res.json().catch(() => ({ error: `Leaderboard unreachable (HTTP ${res.status}). Your run is kept: try again.` }));
+    if (!res.ok || d.error) throw new Error(d.error);
     submitted = true;
     boardEl.innerHTML = d.html;
     boardEl.children[d.rank - 1]?.classList.add('you');

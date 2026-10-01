@@ -11,9 +11,14 @@
 //                  API URL in the page is relative to it, with or without a trailing slash
 
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import pg from 'pg';
+
+// The game version is package.json's: shown in the HUD and stored with every run, so a change to
+// the track or physics never mixes incomparable runs without trace.
+const VERSION = JSON.parse(readFileSync(new URL('package.json', import.meta.url), 'utf8')).version;
 
 const cfg = {
   port: Number(process.env.PORT),
@@ -37,6 +42,7 @@ await db.query(`
     client      text NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()
   );
+  ALTER TABLE runs ADD COLUMN IF NOT EXISTS game_version text;
   CREATE INDEX IF NOT EXISTS runs_distance ON runs (distance_m DESC, created_at);
 `);
 
@@ -48,7 +54,7 @@ const SUBMIT = { perMinute: 6 };
 
 async function board() {
   const { rows } = await db.query(
-    `SELECT name, pilot, model, distance_m, created_at FROM runs ORDER BY distance_m DESC, created_at ASC LIMIT $1`,
+    `SELECT name, pilot, model, distance_m, game_version, created_at FROM runs ORDER BY distance_m DESC, created_at ASC LIMIT $1`,
     [cfg.boardSize],
   );
   return rows;
@@ -66,7 +72,7 @@ const clientOf = (req) => createHash('sha256').update(String(req.headers['x-forw
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const boardRows = (rows) => rows.length
-  ? rows.map((r, i) => `<li><span class="rank">${String(i + 1).padStart(2, '0')}</span><span class="who">${esc(r.name)}${r.pilot === 'player' ? '' : ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}</i>`}</span><span class="dist">${r.distance_m} m</span></li>`).join('')
+  ? rows.map((r, i) => `<li><span class="rank">${String(i + 1).padStart(2, '0')}</span><span class="who">${esc(r.name)}${r.pilot === 'player' ? '' : ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}</i>`}</span><span class="dist">${r.distance_m} m <i class="ver">v${esc(r.game_version ?? '?')}</i></span></li>`).join('')
   : '<li class="empty">No runs yet. Be the first.</li>';
 
 const page = (rows) => `<!doctype html>
@@ -118,6 +124,7 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .board .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board .pilot { color: var(--green); font-style: normal; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
 .board .dist { text-align: right; }
+.board .ver { color: var(--dim); font-style: normal; font-size: 11px; margin-left: 6px; }
 form.sign { display: flex; gap: 8px; pointer-events: auto; }
 form.sign[hidden] { display: none; }
 form.sign input { font: 500 15px 'Geist Mono', monospace; padding: 9px 12px; width: 220px; border: 1px solid var(--fg); background: var(--paper); color: var(--fg); }
@@ -134,7 +141,7 @@ form.sign button { font: 500 13px 'Geist Mono', monospace; letter-spacing: 0.08e
 <div class="hud">
   <div class="row">
     <img class="mark" src="hw.svg" alt="Hopsworks">
-    <div class="label">Hops Run <b>01</b></div>
+    <div class="label">Hops Run <b>v${VERSION}</b></div>
   </div>
   <div></div>
   <div class="row bottom">
@@ -172,7 +179,7 @@ app.get('/', async (_req, res, next) => {
   try { res.type('html').send(page(await board())); } catch (e) { next(e); }
 });
 app.get('/health', async (_req, res) => {
-  try { await db.query('SELECT 1'); res.send('ok'); } catch { res.status(503).send('database unavailable'); }
+  try { await db.query('SELECT 1'); res.json({ status: 'ok', version: VERSION }); } catch { res.status(503).send('database unavailable'); }
 });
 app.get('/api/board', async (_req, res, next) => {
   try { const runs = await board(); res.json({ runs, html: boardRows(runs) }); } catch (e) { next(e); }
@@ -186,8 +193,8 @@ app.post('/api/runs', async (req, res, next) => {
     const client = clientOf(req);
     if (!allowed(client)) return res.status(429).json({ error: 'Too many runs from here in the last minute. Try again shortly.' });
     const { rows: [run] } = await db.query(
-      `INSERT INTO runs (name, distance_m, duration_ms, client) VALUES ($1, $2, $3, $4) RETURNING id, distance_m, created_at`,
-      [name, distance, duration, client],
+      `INSERT INTO runs (name, distance_m, duration_ms, client, game_version) VALUES ($1, $2, $3, $4, $5) RETURNING id, distance_m, created_at`,
+      [name, distance, duration, client, VERSION],
     );
     const { rows: [{ rank }] } = await db.query(
       `SELECT count(*)::int + 1 AS rank FROM runs WHERE distance_m > $1 OR (distance_m = $1 AND created_at < $2)`,
