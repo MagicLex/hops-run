@@ -151,8 +151,23 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .metric small { font-size: 0.4em; letter-spacing: 0.02em; color: var(--dim); margin-left: 6px; }
 .stack { display: grid; gap: 10px; }
 .right { text-align: right; justify-items: end; }
-.jump { display: flex; align-items: center; gap: 10px; }
+/* Cockpit: corner brackets and edge ticks frame the view, a reticle banks with the hops during a
+   run, speed and jump read as graduated gauges. */
+.canopy { position: fixed; inset: calc(var(--m) * 0.45); pointer-events: none; opacity: 0.45; --c: var(--fg); --l: 28px; --t: 10px; --w: 1.5px;
+  background: linear-gradient(var(--c), var(--c)) 0 0 / var(--l) var(--w), linear-gradient(var(--c), var(--c)) 0 0 / var(--w) var(--l),
+    linear-gradient(var(--c), var(--c)) 100% 0 / var(--l) var(--w), linear-gradient(var(--c), var(--c)) 100% 0 / var(--w) var(--l),
+    linear-gradient(var(--c), var(--c)) 0 100% / var(--l) var(--w), linear-gradient(var(--c), var(--c)) 0 100% / var(--w) var(--l),
+    linear-gradient(var(--c), var(--c)) 100% 100% / var(--l) var(--w), linear-gradient(var(--c), var(--c)) 100% 100% / var(--w) var(--l),
+    linear-gradient(var(--c), var(--c)) 50% 0 / var(--w) var(--t), linear-gradient(var(--c), var(--c)) 50% 100% / var(--w) var(--t),
+    linear-gradient(var(--c), var(--c)) 0 50% / var(--t) var(--w), linear-gradient(var(--c), var(--c)) 100% 50% / var(--t) var(--w);
+  background-repeat: no-repeat; }
+.reticle { position: fixed; left: 50%; top: 46%; width: 160px; transform: translate(-50%, -50%) rotate(var(--bank, 0deg)); pointer-events: none;
+  fill: none; stroke: var(--fg); stroke-width: 1.5; stroke-linecap: round; opacity: 0; transition: opacity 0.3s; }
+body.flying .reticle { opacity: 0.5; }
+.jump { display: grid; grid-template-columns: 56px 140px auto; align-items: center; gap: 10px; }
 .gauge { width: 140px; height: 2px; background: var(--rule); position: relative; }
+.gauge.ticks::after { content: ''; position: absolute; left: 0; right: 0; bottom: 3px; height: 5px; opacity: 0.6;
+  background: repeating-linear-gradient(90deg, var(--dim) 0 1px, transparent 1px 14px); }
 .gauge i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--fg); }
 .gauge i.full { background: var(--green); }
 .mind { width: min(320px, 44vw); display: grid; gap: 8px; }
@@ -205,6 +220,8 @@ ${cfg.umami ? `<script defer src="${esc(cfg.umami.src)}" data-website-id="${esc(
 <div class="grain"></div>
 <div class="flash"></div>
 ${cfg.liveChannel ? liveCard(cfg.liveChannel) : ''}
+<div class="canopy"></div>
+<svg class="reticle" id="reticle" viewBox="-80 -14 160 28" aria-hidden="true"><path d="M-76 0h34M42 0h34M-12 8l12-7 12 7M-42 0v5M42 0v5"/></svg>
 <div class="hud">
   <div class="row">
     <img class="mark" src="hw.svg" alt="Hopsworks">
@@ -214,8 +231,8 @@ ${cfg.liveChannel ? liveCard(cfg.liveChannel) : ''}
   <div class="row bottom">
     <div class="stack">
       <div class="metric" id="distance">0<small>m</small></div>
-      <div class="label">Speed <b id="speed">0</b> m/s</div>
-      <div class="label jump">Jump <span class="gauge"><i id="charge"></i></span></div>
+      <div class="label jump"><span>Speed</span><span class="gauge ticks"><i id="speedbar"></i></span><span><b id="speed">0</b> m/s</span></div>
+      <div class="label jump"><span>Jump</span><span class="gauge ticks"><i id="charge"></i></span></div>
     </div>
     <div class="stack right">
       <div class="mind" id="mind" hidden>

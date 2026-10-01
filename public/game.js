@@ -538,7 +538,7 @@ new MutationObserver(drawSlab).observe(document.getElementById('board'), { child
 document.body.classList.add('in-world'); // the 3D slab now carries the board; the HTML list stays for no-JS and crawlers
 
 // --- state ---------------------------------------------------------------------------------------
-const ui = Object.fromEntries(['distance', 'speed', 'status', 'prompt', 'charge'].map((id) => [id, document.getElementById(id)]));
+const ui = Object.fromEntries(['distance', 'speed', 'speedbar', 'reticle', 'status', 'prompt', 'charge'].map((id) => [id, document.getElementById(id)]));
 const grain = document.querySelector('.grain');
 let mode = 'ready'; // ready | flying | crashed
 let flightMs = 0;
@@ -614,6 +614,7 @@ function start() {
   showLive(false);
   reset();
   mode = 'flying';
+  document.body.classList.add('flying');
   flightMs = 0; lastRun = null; submitted = false; pilot.armed = null;
   ui.prompt.hidden = true; form.hidden = true; result.hidden = true;
   ui.status.textContent = 'Flying'; ui.status.className = 'label flying';
@@ -621,6 +622,7 @@ function start() {
 
 function crash(row, hitMesh) {
   mode = 'crashed';
+  document.body.classList.remove('flying');
   crashV = speed + boost; timeScale = 0.25;
   for (const m of row.meshes) if (m.userData.kind !== 'post') paint(m, RUST);
   shatterBlock(hitMesh, crashV);
@@ -995,6 +997,9 @@ function frame(now) {
 
   ui.distance.innerHTML = `${Math.round(distance)}<small>m</small>`;
   ui.speed.textContent = Math.round(v);
+  ui.speedbar.style.width = `${Math.min(100, (v / (SPEED.max + BOOST.kick)) * 100).toFixed(1)}%`;
+  ui.speedbar.classList.toggle('full', boost > 1);
+  ui.reticle.style.setProperty('--bank', `${THREE.MathUtils.radToDeg(tilt.rotation.z) * 0.4}deg`);
   ui.charge.style.width = `${(charge * 100).toFixed(1)}%`;
   ui.charge.classList.toggle('full', charge >= 1);
   renderer.render(scene, camera);
