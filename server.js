@@ -7,8 +7,6 @@
 //   PORT           listen port
 //   DATABASE_URL   postgres://user:password@host:5432/db
 //   BOARD_SIZE     rows on the leaderboard (default 10)
-//   BASE_PATH      public path the game is served under, e.g. /run/ (default /): every asset and
-//                  API URL in the page is relative to it, with or without a trailing slash
 
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -24,10 +22,8 @@ const cfg = {
   port: Number(process.env.PORT),
   databaseUrl: process.env.DATABASE_URL,
   boardSize: Number(process.env.BOARD_SIZE ?? 10),
-  basePath: process.env.BASE_PATH ?? '/',
 };
 if (!cfg.port || !cfg.databaseUrl) throw new Error('missing setting: PORT and DATABASE_URL are required');
-if (!/^\/([\w.-]+\/)*$/.test(cfg.basePath)) throw new Error('BASE_PATH must start and end with a slash, e.g. /run/');
 
 // The pool lives for the process and is closed on shutdown.
 const db = new pg.Pool({ connectionString: cfg.databaseUrl, max: 5 });
@@ -80,7 +76,6 @@ const page = (rows) => `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<base href="${cfg.basePath}">
 <title>Hops Run</title>
 <meta name="description" content="Fly the hops through a procedural track of turns, loops and corkscrews. Dodge, jump and duck, then put your name on the leaderboard.">
 <link rel="preload" href="fonts/GeistMono.ttf" as="font" type="font/ttf" crossorigin>

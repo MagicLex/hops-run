@@ -2,7 +2,7 @@
 
 A low-poly racer in the Hopsworks paper style. The hops flies a procedurally generated track (turns, side banks, corkscrews, loops, inverted sections) through obstacle rows. After a crash the player puts their name and distance on the leaderboard, which the start screen shows.
 
-Live at [hopsworks.ai/run](https://www.hopsworks.ai/run/).
+Live at [game.hopsworks.ai](https://game.hopsworks.ai). `hopsworks.ai/run` redirects there.
 
 ## Run
 
@@ -16,7 +16,6 @@ PORT=8811 DATABASE_URL=postgres://hops_run:...@localhost:5432/hops_run npm start
 | `PORT` | Listen port |
 | `DATABASE_URL` | Postgres connection string. The `runs` table is created at start if missing |
 | `BOARD_SIZE` | Rows on the leaderboard, default 10 |
-| `BASE_PATH` | Public path the game is served under, default `/`. `/run/` behind hopsworks.ai |
 
 ## API
 
@@ -33,7 +32,7 @@ Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so deci
 
 ## Deploy
 
-On `crm-hops`, in the GTM stack (`/home/debian/stack`): services `hops-run` (built from `./hops-run`, synced from this repo) and `hops-run-db` (`postgres:16`, volume `hops-run-db-data`, password `HOPS_RUN_PG_PASSWORD` in `.env`). Caddy serves it publicly at `https://game.hopsworks.ai/run/`, stripping the `/run` prefix. `hopsworks.ai/run` is a rewrite in the `hopsworks-web` site to that address.
+On `crm-hops`, in the GTM stack (`/home/debian/stack`): services `hops-run` (built from `./hops-run`, synced from this repo) and `hops-run-db` (`postgres:16`, volume `hops-run-db-data`, password `HOPS_RUN_PG_PASSWORD` in `.env`). Caddy serves it publicly at `https://game.hopsworks.ai` (DNS: `game` A `57.129.92.116` on `hopsworks.ai`). `hopsworks.ai/run` is a redirect to it in the `hopsworks-web` site.
 
 ```sh
 tar --no-mac-metadata --exclude node_modules --exclude .git -czf - . | ssh crm-hops 'rm -rf stack/hops-run && mkdir stack/hops-run && tar xzf - -C stack/hops-run'
