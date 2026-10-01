@@ -74,7 +74,7 @@ async function board() {
 // Muted preview of the pilot's live stream; a click opens the stream on YouTube.
 const liveCard = (channel) => `<a class="live" id="live" href="https://www.youtube.com/channel/${esc(channel)}/live" target="_blank" rel="noopener">
   <iframe data-src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" title="jevworks live on YouTube" allow="autoplay; encrypted-media" tabindex="-1"></iframe>
-  <span class="label"><i class="dot"></i><b>jevworks</b> is flying live · watch</span>
+  <span class="label"><i class="dot"></i><span>Live · watch <b>jevworks</b></span></span>
 </a>`;
 
 // A model pilot proves itself with the bearer token whose sha256 is PILOT_TOKEN_SHA256.
@@ -206,7 +206,8 @@ form.sign button { font: 500 13px 'Geist Mono', monospace; letter-spacing: 0.08e
 .live { position: fixed; top: calc(var(--m) + 44px); right: var(--m); width: 256px; display: grid; gap: 8px; text-decoration: none; pointer-events: auto; }
 .live[hidden] { display: none; }
 .live iframe { width: 256px; height: 144px; border: 1px solid var(--rule); background: var(--fg); pointer-events: none; display: block; }
-.live .label { display: flex; align-items: center; gap: 8px; justify-content: flex-end; white-space: nowrap; }
+.live .label { display: flex; align-items: center; gap: 8px; justify-content: flex-end; white-space: nowrap; overflow: hidden; }
+.live .label span { overflow: hidden; text-overflow: ellipsis; }
 .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 .in-world .board, .in-world .board-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
