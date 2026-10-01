@@ -6,7 +6,7 @@ They are the model pilots of [Hops Run](https://game.hopsworks.ai): a runner fli
 
 | Deployment | Model | Hardware | Pilot | Code |
 | --- | --- | --- | --- | --- |
-| `semif4b` | Qwen3-4B, SemIf logit readout | 1 GPU, bfloat16 | `jevworks` | `predictor.py`, `deploy.py` |
+| `semif4b` | Qwen3-4B, SemIf logit readout | 1 GPU, bfloat16 | `qwen` | `predictor.py`, `deploy.py` |
 | `kumo` | Kumo Tabular small | 2 CPU cores | `kumo` | `kumo/` |
 | `clef` | Clef-Flash | 1 GPU | `clef` | `clef/` |
 | `semif`, `semif8b` | Qwen3-0.6B, Qwen3-8B | | | `predictor.py`, `deploy.py` |
