@@ -600,9 +600,18 @@ const PILOT = typeof window.jevworksDecide === 'function';
 // Umami custom events, when the page loads the tracker; a model pilot's runs are not visits.
 const analytics = (event, data) => { if (!PILOT) window.umami?.track(event, data); };
 
+// The pilot's live preview is unloaded during a run, so it never takes frames from the game.
+const live = document.getElementById('live'), liveFrame = live?.querySelector('iframe');
+function showLive(on) {
+  if (!liveFrame) return;
+  live.hidden = !on;
+  liveFrame.src = on ? liveFrame.dataset.src : 'about:blank';
+}
+
 function start() {
   if (seat.state !== 'play') return;
   analytics('run-start');
+  showLive(false);
   reset();
   mode = 'flying';
   flightMs = 0; lastRun = null; submitted = false; pilot.armed = null;
@@ -627,6 +636,7 @@ function crash(row, hitMesh) {
   if (PILOT) finished(lastRun);
   setTimeout(() => {
     if (mode !== 'crashed') return;
+    if (!PILOT) showLive(true);
     ui.prompt.querySelector('h1').textContent = `${lastRun.distance} m`;
     if (PILOT) { result.hidden = false; ui.prompt.hidden = false; return; }
     result.hidden = false; result.textContent = 'Put your run on the board';
@@ -793,6 +803,7 @@ async function finished(run) {
   pilot.restartAt = performance.now() + RESTART_MS;
 }
 if (PILOT) {
+  live?.remove(); // the pilot's own page is the stream
   mind.hidden = false; pilotEl.hidden = false;
   document.querySelector('.keys').hidden = true;
   showPilot();

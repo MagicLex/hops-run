@@ -12,6 +12,8 @@
 //   UMAMI_WEBSITE_ID  Umami website id (analytics off when unset)
 //   PILOT_TOKEN_SHA256  sha256 (hex) of the bearer token a model pilot posts its runs with
 //                       (model pilot runs refused when unset)
+//   LIVE_YOUTUBE_CHANNEL  YouTube channel id streaming the jevworks pilot: the start screen shows
+//                         its live preview (none when unset)
 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -28,6 +30,7 @@ const cfg = {
   databaseUrl: process.env.DATABASE_URL,
   boardSize: Number(process.env.BOARD_SIZE ?? 10),
   maxPlayers: Number(process.env.MAX_PLAYERS),
+  liveChannel: process.env.LIVE_YOUTUBE_CHANNEL || null,
   pilotToken: process.env.PILOT_TOKEN_SHA256 ? Buffer.from(process.env.PILOT_TOKEN_SHA256, 'hex') : null,
   umami: process.env.UMAMI_SRC && process.env.UMAMI_WEBSITE_ID ? { src: process.env.UMAMI_SRC, id: process.env.UMAMI_WEBSITE_ID } : null,
 };
@@ -67,6 +70,12 @@ async function board() {
   );
   return rows;
 }
+
+// Muted preview of the pilot's live stream; a click opens the stream on YouTube.
+const liveCard = (channel) => `<a class="live" id="live" href="https://www.youtube.com/channel/${esc(channel)}/live" target="_blank" rel="noopener">
+  <iframe data-src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" title="jevworks live on YouTube" allow="autoplay; encrypted-media" tabindex="-1"></iframe>
+  <span class="label"><i class="dot"></i><b>jevworks</b> is flying live · watch</span>
+</a>`;
 
 // A model pilot proves itself with the bearer token whose sha256 is PILOT_TOKEN_SHA256.
 function isPilot(req) {
@@ -179,8 +188,14 @@ form.sign[hidden] { display: none; }
 form.sign input { font: 500 15px 'Geist Mono', monospace; padding: 9px 12px; width: 220px; border: 1px solid var(--fg); background: var(--paper); color: var(--fg); }
 form.sign button { font: 500 13px 'Geist Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; padding: 9px 14px; border: 1px solid var(--fg); background: var(--fg); color: var(--paper); cursor: pointer; }
 .err { color: var(--error); }
+.live { position: fixed; top: calc(var(--m) + 44px); right: var(--m); width: 256px; display: grid; gap: 8px; text-decoration: none; pointer-events: auto; }
+.live[hidden] { display: none; }
+.live iframe { width: 256px; height: 144px; border: 1px solid var(--rule); background: var(--fg); pointer-events: none; display: block; }
+.live .label { display: flex; align-items: center; gap: 8px; justify-content: flex-end; white-space: nowrap; }
+.live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.25; } }
 .in-world .board, .in-world .board-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-@media (max-width: 640px) { .mind { width: 100%; } .row.bottom { flex-direction: column-reverse; align-items: stretch; } .right { text-align: left; justify-items: start; } form.sign input { width: 160px; } }
+@media (max-width: 640px) { .live { width: auto; } .live iframe { display: none; } .mind { width: 100%; } .row.bottom { flex-direction: column-reverse; align-items: stretch; } .right { text-align: left; justify-items: start; } form.sign input { width: 160px; } }
 </style>
 <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.js" } }</script>
 ${cfg.umami ? `<script defer src="${esc(cfg.umami.src)}" data-website-id="${esc(cfg.umami.id)}"></script>` : ''}
@@ -189,6 +204,7 @@ ${cfg.umami ? `<script defer src="${esc(cfg.umami.src)}" data-website-id="${esc(
 <canvas id="scene"></canvas>
 <div class="grain"></div>
 <div class="flash"></div>
+${cfg.liveChannel ? liveCard(cfg.liveChannel) : ''}
 <div class="hud">
   <div class="row">
     <img class="mark" src="hw.svg" alt="Hopsworks">
