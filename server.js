@@ -32,10 +32,10 @@ const MOVES = {
   left: 'Move one lane to the left',
   right: 'Move one lane to the right',
   hold: 'Keep flying straight in the current lane',
-  up: 'Jump, to fly over a low block',
+  up: 'Jump, to fly over a low block or a bar',
   down: 'Duck, to fly under a bar',
 };
-const QUESTION = 'The hops flies forward through three lanes. A wall can only be avoided by changing lane, a low block by jumping over it, a bar by ducking under it. Which move gets the hops safely past the nearest row?';
+const QUESTION = 'The hops flies forward through three lanes. A wall can only be avoided by changing lane, a low block by jumping over it, a bar by ducking under it or jumping over it. Which move gets the hops safely past the nearest row?';
 
 // The game sends structured state; the prompt is built here so the browser never shapes it.
 function row({ lane, airborne, ahead }) {

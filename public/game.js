@@ -33,8 +33,9 @@ const JUMP = 16, DUCK = { hover: 0.45, time: 0.7 }; // m/s up; hover height and 
 // Jump charge: fills while flying and with every cleared row; a jump spends all of it, up to
 // (1 + power) times the base jump.
 const CHARGE = { perSecond: 1 / 25, perRow: 0.08, power: 1.6 };
-const BODY = 0.6; // half height of the hops
-// Obstacle kinds: a wall is dodged sideways, a low block jumped, a bar ducked under.
+// The hops as an ellipsoid for collisions: radii across, up and along, centred where its body is.
+const HULL = { x: 1.0, y: 1.0, z: 1.5 };
+// Obstacle kinds: a wall is dodged sideways, a low block jumped, a bar ducked under or jumped.
 const KIND = { wall: { p: 0.5, h: [4.6, 5.6] }, low: { p: 0.25, h: [0.9, 1.1] }, bar: { p: 0.25, bottom: 1.7, t: 0.6 } };
 
 // --- renderer, camera ---------------------------------------------------------------------------
@@ -478,13 +479,14 @@ function spawnRow(rs) {
     if (kind === 'bar') {
       const { bottom, t } = KIND.bar;
       const beam = place(block(w, t, 1.0), rs, lx, bottom + t / 2);
-      beam.userData = { kind, bottom, s: rs, x: lx, h: bottom + t / 2 };
-      for (const px of [-w / 2 + 0.12, w / 2 - 0.12]) { const post = place(block(0.24, bottom, 0.24), rs, lx + px, bottom / 2); post.userData = { kind: 'post' }; meshes.push(post); scene.add(post); }
+      beam.userData = { kind, s: rs, x: lx, h: bottom + t / 2, hw: w / 2, hh: t / 2, hd: 0.5 };
+      for (const px of [-w / 2 + 0.12, w / 2 - 0.12]) { const post = place(block(0.24, bottom, 0.24), rs, lx + px, bottom / 2); post.userData = { kind: 'post', s: rs, x: lx + px, h: bottom / 2, hw: 0.12, hh: bottom / 2, hd: 0.12 }; meshes.push(post); scene.add(post); }
       meshes.push(beam); scene.add(beam);
     } else {
       const [lo, hi] = KIND[kind].h, bh = between(lo, hi);
-      const b = place(block(w, bh, kind === 'wall' ? 1.6 : 2.2), rs, lx, bh / 2);
-      b.userData = { kind, top: bh, s: rs, x: lx, h: bh / 2 };
+      const d = kind === 'wall' ? 1.6 : 2.2;
+      const b = place(block(w, bh, d), rs, lx, bh / 2);
+      b.userData = { kind, s: rs, x: lx, h: bh / 2, hw: w / 2, hh: bh / 2, hd: d / 2 };
       meshes.push(b); scene.add(b);
     }
   }
@@ -506,7 +508,7 @@ function reset() {
   track.P.push(gen.p.clone()); track.Q.push(gen.q.clone()); track.kind.push('straight'); track.pitch.push(0);
   timeScale = 1;
   speed = SPEED.start; boost = 0; distance = 0; s = START; x = 0; xv = 0; lane = 1;
-  h = HOVER; hv = 0; airborne = false; hover = HOVER; duckT = 0; camX = 0; camH = 0; charge = 0;
+  h = HOVER; hv = 0; airborne = false; hover = HOVER; duckT = 0; camX = 0; camH = 0; charge = 0; armed = null;
   nextRowAt = START + 110; nextPadAt = START + 200; nextStreakAt = START;
 }
 
@@ -567,6 +569,10 @@ addEventListener('keydown', (e) => {
 });
 
 // --- Jev -----------------------------------------------------------------------------------------
+// Jev's jump and duck are armed against the nearest row and fired when it is LEAD seconds away,
+// so the hops tops its arc, or is lowest, as it crosses; lane changes apply at once.
+const LEAD = { up: 0.3, down: 0.25 };
+let armed = null; // { move, row }
 const moveRows = Object.fromEntries([...ui.mind.querySelectorAll('.move')].map((el) => [el.dataset.move, el]));
 let asking = false;
 
@@ -579,7 +585,12 @@ async function ask() {
     const d = await res.json();
     if (!res.ok) throw new Error(d.error);
     show(d);
-    if (pilot === 'jev' && mode === 'flying') steer(d.moves[d.probabilities.indexOf(Math.max(...d.probabilities))]);
+    if (pilot === 'jev' && mode === 'flying') {
+      const move = d.moves[d.probabilities.indexOf(Math.max(...d.probabilities))];
+      const next = rows.find((r) => !r.cleared && r.s > s);
+      if ((move === 'up' || move === 'down') && next) armed = { move, row: next };
+      else steer(move);
+    }
   } catch (e) {
     ui.model.innerHTML = `<span class="err">Jev unavailable: ${String(e.message).slice(0, 80)}</span>`;
   } finally {
@@ -722,18 +733,27 @@ function frame(now) {
     const tighten = Math.max(GAP.floor, 1 - distance / GAP.over);
     nextRowAt += between(GAP.min, GAP.max) * tighten;
   }
+  if (armed && flying) {
+    if (armed.row.cleared) armed = null;
+    else if ((armed.row.s - s) / Math.max(v, 1) <= LEAD[armed.move]) { steer(armed.move); armed = null; }
+  }
+
+  // Collision: touch and you crash, miss and you pass. The hops is an ellipsoid (squashed when it
+  // ducks or lands), each obstacle its own box, posts included; the test is exact.
+  const sq = ship.userData.body.scale, cs = s - (along(0) + along(1)) / 2;
+  const rx = HULL.x * sq.x, ry = HULL.y * sq.y, rz = HULL.z * sq.z;
+  const touches = (u) => {
+    const dz = (Math.max(u.s - u.hd, Math.min(cs, u.s + u.hd)) - cs) / rz;
+    const dx = (Math.max(u.x - u.hw, Math.min(x, u.x + u.hw)) - x) / rx;
+    const dy = (Math.max(u.h - u.hh, Math.min(h, u.h + u.hh)) - h) / ry;
+    return dx * dx + dy * dy + dz * dz < 1;
+  };
   for (const r of rows) {
-    const rel = s - r.s; // > 0 once the row is behind the hops
-    if (flying && !r.cleared && Math.abs(rel) < 0.9) {
-      const hit = r.meshes.find((m) => {
-        const { kind } = m.userData;
-        if (kind === 'post' || Math.abs(x - m.userData.x) >= (LANE_X - 0.4) / 2 + 0.8) return false;
-        if (kind === 'bar') return h + BODY * (1 - squash) > m.userData.bottom;
-        return h - BODY < m.userData.top;
-      });
+    if (flying && !r.cleared && Math.abs(r.s - cs) < 4) {
+      const hit = r.meshes.find((m) => touches(m.userData));
       if (hit) crash(r, hit);
     }
-    if (flying && !r.cleared && rel >= 0.9) { r.cleared = true; r.flash = 1; charge = Math.min(1, charge + CHARGE.perRow); for (const m of r.meshes) if (m.userData.kind !== 'post') paint(m, GREEN); }
+    if (flying && !r.cleared && cs - r.s > 1.2 + rz) { r.cleared = true; r.flash = 1; charge = Math.min(1, charge + CHARGE.perRow); for (const m of r.meshes) if (m.userData.kind !== 'post') paint(m, GREEN); }
     if (r.flash > 0) { r.flash -= dt * 1.2; if (r.flash <= 0) for (const m of r.meshes) if (m.userData.kind !== 'post') paint(m, PAPER); }
   }
   for (const r of rows.filter((r) => s - r.s > BEHIND)) for (const m of r.meshes) drop(m);
