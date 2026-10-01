@@ -1,6 +1,6 @@
 // Hops Run: Express server for the game. Serves the page with the leaderboard rendered in the
 // initial HTML, the three.js scene, and the leaderboard API backed by Postgres. Every run on the
-// board carries its pilot (a player, or a model pilot: jev, jevworks, kumo, clef) and the model
+// board carries its pilot (a player, or a model pilot: jev, qwen, kumo, clef) and the model
 // behind it, so players and decision models race on one board.
 //
 // Settings (env):
@@ -41,7 +41,7 @@ if (!cfg.port || !cfg.databaseUrl || !(cfg.maxPlayers > 0)) throw new Error('mis
 
 // Model pilots, as allowed by the table. A model pilot posts every run it flies, and each run
 // ranks on the board like a player's.
-const PILOTS = ['jev', 'jevworks', 'kumo', 'clef'];
+const PILOTS = ['jev', 'qwen', 'kumo', 'clef'];
 
 // The pool lives for the process and is closed on shutdown.
 const db = new pg.Pool({ connectionString: cfg.databaseUrl, max: 5 });
@@ -68,6 +68,8 @@ await db.query(`
   );
   CREATE INDEX IF NOT EXISTS run_starts_started_at ON run_starts (started_at);
   ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_pilot_check;
+  -- The SemIf pilot on Qwen was named after its project (jevworks) until v1.11.0.
+  UPDATE runs SET pilot = 'qwen', name = 'qwen' WHERE pilot = 'jevworks';
   ALTER TABLE runs ADD CONSTRAINT runs_pilot_check CHECK (pilot IN (${['player', ...PILOTS].map((p) => `'${p}'`).join(', ')}));
 `);
 
@@ -179,7 +181,7 @@ const PERSON = '<svg class="icon human" viewBox="0 0 16 16" aria-label="player">
 // Who built each model pilot, credited on its rows.
 const MAKERS = {
   jev: { name: 'TypeSafe', url: 'https://typesafe.ai' },
-  jevworks: { name: 'SemIf', url: 'https://github.com/TheoLeeCJ/SemIf' },
+  qwen: { name: 'SemIf', url: 'https://github.com/TheoLeeCJ/SemIf' },
   kumo: { name: 'NVIDIA', url: 'https://huggingface.co/nvidia/Kumo-Tabular' },
   clef: { name: 'Cloudflare', url: 'https://huggingface.co/Cloudflare/clef-flash' },
 };

@@ -19,7 +19,7 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 | `BOARD_SIZE` | Rows on the leaderboard, default 10 |
 | `PILOT_TOKEN_SHA256` | sha256 (hex) of the bearer token model pilots post their runs with. Pilot runs are refused when unset |
 | `PUBLIC_URL` | Public origin, e.g. `https://game.hopsworks.ai/`. Sets the canonical link and the share card (Open Graph, X) with `public/og.jpg`. No share card when unset |
-| `LIVE_YOUTUBE_CHANNEL` | YouTube channel id streaming the jevworks pilot. The start and crash screens show a muted preview of its live stream, linked to YouTube, unloaded during a run |
+| `LIVE_YOUTUBE_CHANNEL` | YouTube channel id streaming the model pilots. The start and crash screens show a muted preview of its live stream, linked to YouTube, unloaded during a run |
 | `UMAMI_SRC`, `UMAMI_WEBSITE_ID` | Umami tracker script and website id. Analytics is off when either is unset |
 
 ## API
@@ -40,13 +40,13 @@ At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and t
 
 Analytics: Umami (`analytics.hops.io`, website `Hops Run`) records page views and the events `run-start`, `crash` (`distance`), `board-submit` (`distance`, `rank`) and `queue-wait` (`position`).
 
-Every run carries a `pilot` (`player`, `jev`, `jevworks`, `kumo`, `clef`) and a `model`, so decision models race on the same board. Players are `player`, marked with a person; a model pilot's first row also shows how many runs it has flown. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, jevworks: SemIf on Qwen3, kumo: NVIDIA, clef: Cloudflare). The best player and each model pilot missing from the top runs are listed below them, each with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
+Every run carries a `pilot` (`player`, `jev`, `qwen`, `kumo`, `clef`) and a `model`, so decision models race on the same board. Players are `player`, marked with a person; a model pilot's first row also shows how many runs it has flown. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, qwen: SemIf, kumo: NVIDIA, clef: Cloudflare). The best player and each model pilot missing from the top runs are listed below them, each with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
 
 ## Model pilots
 
 `pilot/` flies the live game for ever: a Hopsworks App on `lex-gpu` (project `jevworks`) runs the page in a headless Chromium rendering on a GPU. The decision models take turns, one run each: each asks its model for every move and posts its run to the board under its own pilot. The page shows who is flying and the decision (move probabilities, forward time, that pilot's run number and best). When the game ships a new version the runner reloads the page between runs.
 
-`DECIDER` is the rotation, comma-separated (e.g. `semif,kumo,jev`; one decider flies alone): `semif` (pilot `jevworks`, the default), `jev` (TypeSafe's Jev API, one Choice question per move; `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`), `kumo` (NVIDIA Kumo Tabular deciding by in-context learning over game situations labelled by the rules, deployed from [jevworks](https://github.com/MagicLex/jevworks) `kumo/`; `KUMO_URL`) or `clef` (Cloudflare Clef-Flash answering the same SystemOne request as Jev, deployed from [jevworks](https://github.com/MagicLex/jevworks) `clef/`; `CLEF_URL`).
+`DECIDER` is the rotation, comma-separated (e.g. `semif,kumo,jev`; one decider flies alone): `semif` (pilot `qwen`: SemIf's logit readout on Qwen3, the default), `jev` (TypeSafe's Jev API, one Choice question per move; `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`), `kumo` (NVIDIA Kumo Tabular deciding by in-context learning over game situations labelled by the rules, deployed from [jevworks](https://github.com/MagicLex/jevworks) `kumo/`; `KUMO_URL`) or `clef` (Cloudflare Clef-Flash answering the same SystemOne request as Jev, deployed from [jevworks](https://github.com/MagicLex/jevworks) `clef/`; `CLEF_URL`).
 
 The page enters pilot mode only when the runner exposes `jevworksDecide` and `jevworksFinished`; players never see it. The token lives in the Hopsworks secret `jevworks_pilot_token` of the deploying user; the game holds its sha256 in `PILOT_TOKEN_SHA256`.
 

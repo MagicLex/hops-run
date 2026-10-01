@@ -6,7 +6,7 @@
 //
 // Settings: config.json next to this file (written by deploy.py), overridden by env:
 //   GAME_URL      the game, e.g. https://game.hopsworks.ai/
-//   DECIDER       the rotation, comma-separated: semif (pilot jevworks, the default), jev (pilot jev),
+//   DECIDER       the rotation, comma-separated: semif (pilot qwen, the default), jev (pilot jev),
 //                 kumo (pilot kumo), clef (pilot clef); e.g. semif,kumo,jev
 //   SEMIF_URL     path-routed predict URL of the semif deployment, for semif
 //   KUMO_URL      path-routed predict URL of the Kumo Tabular deployment (MagicLex/jevworks kumo/), for kumo
@@ -54,7 +54,7 @@ const cfg = {
   jwt: process.env.SECRETS_DIR && `${process.env.SECRETS_DIR}/token.jwt`,
 };
 const DECIDERS = {
-  semif: { pilot: 'jevworks', needs: ['semifUrl'] },
+  semif: { pilot: 'qwen', needs: ['semifUrl'] },
   jev: { pilot: 'jev', needs: ['jevUrl', 'jevModel', 'jevKey'] },
   kumo: { pilot: 'kumo', needs: ['kumoUrl'] },
   clef: { pilot: 'clef', needs: ['clefUrl'] },
