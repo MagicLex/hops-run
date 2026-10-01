@@ -141,7 +141,16 @@ function stream(page) {
     });
     await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: width, maxHeight: height });
   })().catch((e) => console.error(`stream: ${e.message}`));
-  return () => { stopped = true; stats.stream = 'off'; cdp?.detach().catch(() => {}); ff?.kill('SIGTERM'); };
+  // On SIGTERM ffmpeg finishes its output and can block there on the network, holding the
+  // ingest: a stream that has not exited 5 s later is killed.
+  return () => {
+    stopped = true; stats.stream = 'off';
+    cdp?.detach().catch(() => {});
+    if (!ff || ff.exitCode !== null) return;
+    const dead = ff;
+    dead.stdin.end(); dead.kill('SIGTERM');
+    setTimeout(() => { if (dead.exitCode === null && dead.signalCode === null) dead.kill('SIGKILL'); }, 5000);
+  };
 }
 
 // --- browser -------------------------------------------------------------------------------------
