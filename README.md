@@ -16,6 +16,7 @@ PORT=8811 DATABASE_URL=postgres://hops_run:...@localhost:5432/hops_run npm start
 | `PORT` | Listen port |
 | `DATABASE_URL` | Postgres connection string. The `runs` table is created at start if missing |
 | `BOARD_SIZE` | Rows on the leaderboard, default 10 |
+| `BASE_PATH` | Public path the game is served under, default `/`. `/run/` behind hopsworks.ai |
 
 ## API
 
@@ -35,7 +36,7 @@ Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so deci
 On `crm-hops`, in the GTM stack (`/home/debian/stack`): services `hops-run` (built from `./hops-run`, synced from this repo) and `hops-run-db` (`postgres:16`, volume `hops-run-db-data`, password `HOPS_RUN_PG_PASSWORD` in `.env`). Caddy serves it publicly at `https://hops.io/run/`, stripping the `/run` prefix. `hopsworks.ai/run` is a rewrite in the `hopsworks-web` site to that address.
 
 ```sh
-rsync -a --delete --exclude node_modules --exclude .git ./ crm-hops:/home/debian/stack/hops-run/
+tar --no-mac-metadata --exclude node_modules --exclude .git -czf - . | ssh crm-hops 'rm -rf stack/hops-run && mkdir stack/hops-run && tar xzf - -C stack/hops-run'
 ssh crm-hops 'cd /home/debian/stack && docker compose up -d --build hops-run'
 ```
 
