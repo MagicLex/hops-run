@@ -138,12 +138,15 @@ async function finished(run) {
 // --- stream --------------------------------------------------------------------------------------
 // The page as video: Chromium's screencast (JPEG frames as they are painted) into ffmpeg, encoded
 // on the GPU (NVENC) at a constant 30 fps with a silent audio track (YouTube expects one), pushed
-// to STREAM_URL. A dead ffmpeg is restarted while the page lives; frames are dropped while it
-// lags rather than buffered. ffmpeg's messages are logged with the key redacted.
-const STREAM = { fps: 30, bitrate: '6M', backlogBytes: 8 << 20 };
-function stream(page) {
-  let ff = null, cdp = null, stopped = false;
+// to STREAM_URL. One ffmpeg lives as long as the runner, so the ingest never drops: the screencast
+// moves to each new page (a reload, a relaunched browser), and between pages the last frame is
+// sent again. A dead ffmpeg is restarted; frames are dropped while it lags rather than buffered.
+// ffmpeg's messages are logged with the key redacted.
+const STREAM = { fps: 30, bitrate: '6M', backlogBytes: 8 << 20, holdMs: 100 };
+function createStream() {
+  let ff = null, cdp = null, last = null, lastAt = 0, stopped = false;
   const redact = (text) => String(text).replaceAll(cfg.streamKey, '***');
+  const write = (frame) => { if (ff?.stdin.writable && ff.stdin.writableLength < STREAM.backlogBytes) ff.stdin.write(frame); };
   const start = () => {
     if (stopped) return;
     ff = spawn(cfg.ffmpeg, ['-hide_banner', '-loglevel', 'warning',
@@ -163,29 +166,32 @@ function stream(page) {
     });
   };
   start();
-  (async () => {
-    cdp = await page.context().newCDPSession(page);
-    cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
-      if (ff?.stdin.writable && ff.stdin.writableLength < STREAM.backlogBytes) ff.stdin.write(Buffer.from(data, 'base64'));
-      cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
-    });
-    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: width, maxHeight: height });
-  })().catch((e) => console.error(`stream: ${e.message}`));
-  // On SIGTERM ffmpeg finishes its output and can block there on the network, holding the
-  // ingest: a stream that has not exited 5 s later is killed, at once when the pilot exits.
-  return (now = false) => {
-    stopped = true; stats.stream = 'off';
-    cdp?.detach().catch(() => {});
-    if (!ff || ff.exitCode !== null) return;
-    const dead = ff;
-    if (now) return dead.kill('SIGKILL');
-    dead.stdin.end(); dead.kill('SIGTERM');
-    setTimeout(() => { if (dead.exitCode === null && dead.signalCode === null) dead.kill('SIGKILL'); }, 5000);
+  const hold = setInterval(() => { if (last && Date.now() - lastAt > STREAM.holdMs) write(last); }, STREAM.holdMs);
+  return {
+    // Feed the stream from this page from now on.
+    async attach(page) {
+      await cdp?.detach().catch(() => {});
+      cdp = await page.context().newCDPSession(page);
+      cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
+        last = Buffer.from(data, 'base64'); lastAt = Date.now();
+        write(last);
+        cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
+      });
+      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: width, maxHeight: height });
+    },
+    // The runner exits: ffmpeg is killed at once (on SIGTERM it would flush its output and can
+    // block there on the network, holding the ingest).
+    stop() {
+      stopped = true; stats.stream = 'off';
+      clearInterval(hold);
+      if (ff && ff.exitCode === null) ff.kill('SIGKILL');
+    },
   };
 }
+const stream = cfg.streamKey ? createStream() : null;
 
 // --- browser -------------------------------------------------------------------------------------
-let current = null, stopStream = null; // the page being flown (for /frame.jpg), its stream
+let current = null; // the page being flown, for /frame.jpg
 async function fly() {
   const args = cfg.gpu
     ? ['--use-angle=vulkan', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--enable-gpu']
@@ -207,7 +213,7 @@ async function fly() {
         return gl ? gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) : 'no WebGL';
       });
       console.log(`flying ${cfg.gameUrl} v${stats.version}, ${cfg.viewport} on ${stats.renderer}`);
-      if (cfg.streamKey) { stopStream?.(); stopStream = stream(page); }
+      await stream?.attach(page).catch((e) => console.error(`stream: ${e.message}`));
       reloadPending = false;
       while (!reloadPending) {
         const outcome = await Promise.race([closed.then(() => 'closed'), new Promise((r) => setTimeout(r, 5000, 'tick'))]);
@@ -218,7 +224,6 @@ async function fly() {
       await page.waitForTimeout(3000);
     }
   } finally {
-    stopStream?.(); stopStream = null;
     await browser.close().catch(() => {});
   }
 }
@@ -238,7 +243,7 @@ createServer(async (req, res) => {
 // A stop (SIGTERM, SIGINT) ends the pilot: Playwright closes the browser on these signals, and the
 // loop below would otherwise take that for a lost browser and relaunch it.
 for (const signal of ['SIGTERM', 'SIGINT']) {
-  process.on(signal, () => { console.log(`${signal}: stopping`); stopStream?.(true); process.exit(0); });
+  process.on(signal, () => { console.log(`${signal}: stopping`); stream?.stop(); process.exit(0); });
 }
 
 // Run for ever: a lost page or browser is relaunched after a pause.
