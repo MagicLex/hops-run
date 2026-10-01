@@ -29,7 +29,7 @@ const STEP = 1, CHUNK = 64, RIB = 4, ARCH = 160; // metres per track sample, per
 const UNLOCK = { side: 300, cork: 500, loop: 900 }; // metres before side banks, corkscrews and loops can appear
 const HOVER = 1.3, GRAVITY = 45;
 const SPRING = { k: 260, c: 26 }; // lateral spring stiffness and damping
-const JUMP = 16, DUCK = { hover: 0.45, time: 0.7 }; // m/s up; hover height and seconds when ducking
+const JUMP = 16, DUCK = { hover: 0.45, time: 0.7, flat: 0.35, narrow: 0.15 }; // m/s up; hover height, seconds, and how much the hops squeezes when ducking
 // Jump charge: fills while flying and with every cleared row; a jump spends all of it, up to
 // (1 + power) times the base jump.
 const CHARGE = { perSecond: 1 / 25, perRow: 0.08, power: 1.6 };
@@ -463,7 +463,7 @@ const grain = document.querySelector('.grain');
 let mode = 'ready'; // ready | flying | crashed
 let pilot = 'jev';
 let speed = 0, boost = 0, distance = 0, s = 0, x = 0, xv = 0, h = HOVER, hv = 0, lane = 1;
-let crashV = 0, timeScale = 1, camX = 0, camH = 0, charge = 0;
+let crashV = 0, timeScale = 1, camX = 0, camH = 0, charge = 0, duckAmt = 0;
 let nextRowAt = 0, nextPadAt = 0, rows = [], shake = 0, squash = 0, airborne = false, hover = HOVER, duckT = 0;
 const START = CHASE.back + 10; // so the camera starts on the track
 
@@ -477,10 +477,11 @@ function spawnRow(rs) {
     lanes[l] = kind;
     const lx = (LANES.indexOf(l) - 1) * LANE_X, w = LANE_X - 0.4;
     if (kind === 'bar') {
-      const { bottom, t } = KIND.bar;
-      const beam = place(block(w, t, 1.0), rs, lx, bottom + t / 2);
-      beam.userData = { kind, s: rs, x: lx, h: bottom + t / 2, hw: w / 2, hh: t / 2, hd: 0.5 };
-      for (const px of [-w / 2 + 0.12, w / 2 - 0.12]) { const post = place(block(0.24, bottom, 0.24), rs, lx + px, bottom / 2); post.userData = { kind: 'post', s: rs, x: lx + px, h: bottom / 2, hw: 0.12, hh: bottom / 2, hd: 0.12 }; meshes.push(post); scene.add(post); }
+      // Full lane wide on thin posts at the lane edges, so a ducking hops squeezes through.
+      const { bottom, t } = KIND.bar, bw = LANE_X - 0.1;
+      const beam = place(block(bw, t, 1.0), rs, lx, bottom + t / 2);
+      beam.userData = { kind, s: rs, x: lx, h: bottom + t / 2, hw: bw / 2, hh: t / 2, hd: 0.5 };
+      for (const px of [-bw / 2 + 0.08, bw / 2 - 0.08]) { const post = place(block(0.16, bottom, 0.16), rs, lx + px, bottom / 2); post.userData = { kind: 'post', s: rs, x: lx + px, h: bottom / 2, hw: 0.08, hh: bottom / 2, hd: 0.08 }; meshes.push(post); scene.add(post); }
       meshes.push(beam); scene.add(beam);
     } else {
       const [lo, hi] = KIND[kind].h, bh = between(lo, hi);
@@ -666,7 +667,8 @@ function frame(now) {
   tilt.rotation.z = THREE.MathUtils.clamp(-xv * 0.07, -1.1, 1.1); // bank into the turn
   body.rotation.z = Math.sin(t * 2.3) * 0.08;
   squash = Math.max(0, squash - dt * 2.5);
-  body.scale.set(1 + squash * 0.5, 1 - squash, 1 + v / 700);
+  duckAmt = THREE.MathUtils.lerp(duckAmt, duckT > 0 ? 1 : 0, Math.min(1, dt * 18));
+  body.scale.set((1 + squash * 0.5) * (1 - DUCK.narrow * duckAmt), (1 - squash) * (1 - DUCK.flat * duckAmt), 1 + v / 700);
   shadow.position.y = 0.03;
   shadow.scale.setScalar(1 / (1 + (h - hover) * 0.15));
   tilt.getWorldQuaternion(shipQ);
