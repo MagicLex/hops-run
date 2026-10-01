@@ -57,7 +57,7 @@ function row({ lane, airborne, ahead }) {
   return { id: 'hops', state: `${RULES} The hops is in the ${lane} lane${airborne ? ', in the air' : ''}. ${where}`, question: 'What should the hops do?', options };
 }
 
-const stats = { runs: 0, best: 0, last: null, model: null, version: null, lastDecision: Date.now() };
+const stats = { runs: 0, best: 0, last: null, model: null, version: null, renderer: null, lastDecision: Date.now() };
 
 async function decide(state) {
   const res = await fetch(cfg.semifUrl, {
@@ -98,13 +98,14 @@ async function finished(run) {
 }
 
 // --- browser -------------------------------------------------------------------------------------
+let current = null; // the page being flown, for /frame.jpg
 async function fly() {
   const args = cfg.gpu
     ? ['--use-angle=vulkan', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--enable-gpu']
     : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
   const browser = await chromium.launch({ args });
   try {
-    const page = await browser.newPage({ viewport: { width, height } });
+    const page = current = await browser.newPage({ viewport: { width, height } });
     page.on('pageerror', (e) => console.error(`page error: ${e.message}`));
     await page.addInitScript(() => { try { localStorage.setItem('umami.disabled', '1'); } catch { /* storage blocked */ } });
     await page.exposeFunction('jevworksDecide', decide);
@@ -114,7 +115,11 @@ async function fly() {
       stats.version = await gameVersion();
       await page.goto(cfg.gameUrl);
       stats.lastDecision = Date.now();
-      console.log(`flying ${cfg.gameUrl} v${stats.version}, ${cfg.gpu ? 'GPU' : 'CPU'} ${cfg.viewport}`);
+      stats.renderer = await page.evaluate(() => {
+        const gl = document.createElement('canvas').getContext('webgl2'), info = gl?.getExtension('WEBGL_debug_renderer_info');
+        return gl ? gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) : 'no WebGL';
+      });
+      console.log(`flying ${cfg.gameUrl} v${stats.version}, ${cfg.viewport} on ${stats.renderer}`);
       reloadPending = false;
       while (!reloadPending) {
         const outcome = await Promise.race([closed.then(() => 'closed'), new Promise((r) => setTimeout(r, 5000, 'tick'))]);
@@ -129,7 +134,13 @@ async function fly() {
   }
 }
 
-createServer((req, res) => {
+// GET /frame.jpg: what the page shows right now. Anything else: the pilot's state as JSON.
+createServer(async (req, res) => {
+  if (req.url === '/frame.jpg') {
+    const frame = await current?.screenshot({ type: 'jpeg', quality: 80 }).catch(() => null);
+    res.writeHead(frame ? 200 : 503, { 'Content-Type': frame ? 'image/jpeg' : 'text/plain' });
+    return res.end(frame ?? 'no page');
+  }
   const ok = req.url === '/health' && Date.now() - stats.lastDecision < WATCHDOG_MS;
   res.writeHead(ok || req.url !== '/health' ? 200 : 503, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ status: ok ? 'ok' : 'stalled', ...stats, lastDecision: new Date(stats.lastDecision).toISOString() }));

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Hopsworks App entrypoint for the jevworks pilot. The app directory is on HopsFS (FUSE): install
-# and run from local disk. The App image lacks a few libraries Chromium needs and the pod has no
-# root, so their Ubuntu packages are downloaded with a user-owned apt state and unpacked locally.
+# and run from local disk. The App image lacks a few libraries Chromium needs, and the loaders it
+# opens to reach the GPU driver (Vulkan, EGL); the pod has no root, so their Ubuntu packages are
+# downloaded with a user-owned apt state and unpacked locally.
 set -euo pipefail
 dir=/tmp/jevworks-pilot
 rm -rf "$dir" && mkdir -p "$dir/debs" "$dir/libs" "$dir/apt/lists/partial" "$dir/apt/cache/archives/partial"
@@ -14,7 +15,7 @@ npx playwright install --only-shell chromium
 
 apt=(-o "Dir::State::Lists=$dir/apt/lists" -o "Dir::Cache=$dir/apt/cache" -o Debug::NoLocking=1 -o "APT::Sandbox::User=$(id -un)")
 apt-get "${apt[@]}" update -qq
-(cd debs && apt-get "${apt[@]}" download libatk-bridge2.0-0t64 libatspi2.0-0t64 libxkbcommon0 libxres1)
+(cd debs && apt-get "${apt[@]}" download libatk-bridge2.0-0t64 libatspi2.0-0t64 libxkbcommon0 libxres1 libvulkan1 libegl1 libglvnd0 libgles2)
 for deb in debs/*.deb; do dpkg-deb -x "$deb" libs; done
 export LD_LIBRARY_PATH="$dir/libs/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 

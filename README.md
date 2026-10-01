@@ -49,7 +49,7 @@ The page enters pilot mode only when the runner exposes `jevworksDecide` and `je
 HOPSWORKS_HOST=10.117.191.130 HOPSWORKS_PROJECT=jevworks HOPSWORKS_API_KEY=... python pilot/deploy.py   # --no-gpu: SwiftShader, 640x360
 ```
 
-`GET /health` on the App returns the pilot's runs, best, last distance, model and game version, and 503 when no decision came in 5 minutes.
+`GET /health` on the App returns the pilot's runs, best, last distance, model, game version and WebGL renderer, and 503 when no decision came in 5 minutes. `GET /frame.jpg` returns what the page shows right now.
 
 ## Deploy
 

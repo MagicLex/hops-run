@@ -88,8 +88,6 @@ def main():
         app_port=8080,
         memory=res["memory"],
         cores=res["cores"],
-        # Graphics on top of compute: the NVIDIA runtime then mounts the EGL and Vulkan drivers.
-        env_vars={"NVIDIA_DRIVER_CAPABILITIES": "all"} if args.gpu else None,
         description=f"jevworks pilot: flies {args.game_url} for ever with {args.deployment}.",
         readiness_probe_path="/health",
     )
