@@ -4,8 +4,7 @@
 // x across, h above the surface) and is placed in the world through the frame at s: the hops,
 // obstacles, speed gates, debris and the chase camera, which rolls with the track, upside down
 // included. Gravity is magnetic, towards the track; over a crest at speed the hops lifts off.
-// Jev is asked for a move whenever no request is in flight, in both pilot modes, so the panel
-// always shows what the model would do.
+// After a crash the player can put their name and distance on the leaderboard.
 
 import * as THREE from 'three';
 
@@ -482,10 +481,10 @@ function shatterBlock(m, fwd) {
 const flash = document.querySelector('.flash');
 
 // --- state ---------------------------------------------------------------------------------------
-const ui = Object.fromEntries(['distance', 'speed', 'pilot', 'model', 'status', 'prompt', 'mind', 'charge'].map((id) => [id, document.getElementById(id)]));
+const ui = Object.fromEntries(['distance', 'speed', 'status', 'prompt', 'charge'].map((id) => [id, document.getElementById(id)]));
 const grain = document.querySelector('.grain');
 let mode = 'ready'; // ready | flying | crashed
-let pilot = 'jev';
+let flightMs = 0;
 let speed = 0, boost = 0, distance = 0, s = 0, x = 0, xv = 0, h = HOVER, hv = 0, lane = 1;
 let crashV = 0, timeScale = 1, camX = 0, camH = 0, charge = 0, duckAmt = 0;
 let nextRowAt = 0, nextPadAt = 0, rows = [], shake = 0, squash = 0, airborne = false, hover = HOVER, duckT = 0;
@@ -533,16 +532,15 @@ function reset() {
   track.P.push(gen.p.clone()); track.Q.push(gen.q.clone()); track.kind.push('straight'); track.pitch.push(0);
   timeScale = 1;
   speed = SPEED.start; boost = 0; distance = 0; s = START; x = 0; xv = 0; lane = 1;
-  h = HOVER; hv = 0; airborne = false; hover = HOVER; duckT = 0; camX = 0; camH = 0; charge = 0; armed = null;
+  h = HOVER; hv = 0; airborne = false; hover = HOVER; duckT = 0; camX = 0; camH = 0; charge = 0;
   nextRowAt = START + 110; nextPadAt = START + 200; nextStreakAt = START;
 }
 
-function start(who) {
-  pilot = who;
+function start() {
   reset();
   mode = 'flying';
-  ui.prompt.hidden = true;
-  ui.pilot.textContent = who === 'jev' ? 'Jev' : 'You';
+  flightMs = 0; lastRun = null; submitted = false;
+  ui.prompt.hidden = true; form.hidden = true; result.hidden = true;
   ui.status.textContent = 'Flying'; ui.status.className = 'label flying';
 }
 
@@ -558,10 +556,14 @@ function crash(row, hitMesh) {
   flash.style.transition = 'none'; flash.style.opacity = '0.35';
   requestAnimationFrame(() => { flash.style.transition = 'opacity 0.9s ease-out'; flash.style.opacity = '0'; });
   ui.status.textContent = `Crashed at ${Math.round(distance)} m`; ui.status.className = 'label crash';
+  lastRun = { distance: Math.round(distance), durationMs: Math.round(flightMs) };
   setTimeout(() => {
     if (mode !== 'crashed') return;
-    ui.prompt.querySelector('h1').textContent = `${Math.round(distance)} m`;
+    ui.prompt.querySelector('h1').textContent = `${lastRun.distance} m`;
+    result.hidden = false; result.textContent = 'Put your run on the board';
+    form.hidden = false;
     ui.prompt.hidden = false;
+    nameInput.focus();
   }, 900);
 }
 
@@ -581,61 +583,46 @@ function steer(move) {
 }
 
 addEventListener('keydown', (e) => {
+  if (document.activeElement === nameInput) return; // typing a name
   if (mode !== 'flying') {
-    if (e.code === 'KeyJ') start('jev');
-    if (e.code === 'Space') { e.preventDefault(); start('you'); }
+    if (e.code === 'Space') { e.preventDefault(); start(); }
     return;
   }
-  if (pilot !== 'you') return;
   if (e.code === 'ArrowLeft' || e.code === 'KeyA') steer('left');
   if (e.code === 'ArrowRight' || e.code === 'KeyD') steer('right');
   if (e.code === 'ArrowUp' || e.code === 'KeyW') { e.preventDefault(); steer('up'); }
   if (e.code === 'ArrowDown' || e.code === 'KeyS') { e.preventDefault(); steer('down'); }
 });
 
-// --- Jev -----------------------------------------------------------------------------------------
-// Jev's jump and duck are armed against the nearest row and fired when it is LEAD seconds away,
-// so the hops tops its arc, or is lowest, as it crosses; lane changes apply at once.
-const LEAD = { up: 0.3, down: 0.25 };
-let armed = null; // { move, row }
-const moveRows = Object.fromEntries([...ui.mind.querySelectorAll('.move')].map((el) => [el.dataset.move, el]));
-let asking = false;
-
-async function ask() {
-  if (asking || mode !== 'flying') return;
-  asking = true;
-  const t0 = performance.now();
-  const ahead = rows.filter((r) => r.s > s + 0.8).sort((a, b) => a.s - b.s).map((r) => ({ distance: r.s - s, lanes: r.lanes }));
+// --- leaderboard ---------------------------------------------------------------------------------
+// The board is rendered by the server into the page; after a crash the form posts the run and
+// the server returns the board, ranked, as HTML.
+const form = document.getElementById('sign'), nameInput = document.getElementById('name');
+const boardEl = document.getElementById('board'), result = document.getElementById('result');
+try { nameInput.value = localStorage.getItem('hops-run-name') ?? ''; } catch { /* storage blocked */ }
+let lastRun = null, submitted = false;
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!lastRun || submitted) return;
+  const name = nameInput.value.trim();
+  try { localStorage.setItem('hops-run-name', name); } catch { /* storage blocked */ }
+  form.querySelector('button').disabled = true;
   try {
-    const res = await fetch('api/decide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lane: LANES[lane], airborne, ahead }) });
+    const res = await fetch('api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ...lastRun }) });
     const d = await res.json();
     if (!res.ok) throw new Error(d.error);
-    show(d, performance.now() - t0);
-    if (pilot === 'jev' && mode === 'flying') {
-      const move = d.moves[d.probabilities.indexOf(Math.max(...d.probabilities))];
-      const next = rows.find((r) => !r.cleared && r.s > s);
-      if ((move === 'up' || move === 'down') && next) armed = { move, row: next };
-      else steer(move);
-    }
-  } catch (e) {
-    ui.model.innerHTML = `<span class="err">Jev unavailable: ${String(e.message).slice(0, 80)}</span>`;
+    submitted = true;
+    boardEl.innerHTML = d.html;
+    boardEl.children[d.rank - 1]?.classList.add('you');
+    result.textContent = d.rank <= d.runs.length ? `${lastRun.distance} m · rank ${d.rank}` : `${lastRun.distance} m · rank ${d.rank}, outside the top ${d.runs.length}`;
+    form.hidden = true;
+    nameInput.blur();
+  } catch (err) {
+    result.innerHTML = `<span class="err">${String(err.message).replace(/[<>&]/g, '')}</span>`;
   } finally {
-    asking = false;
+    form.querySelector('button').disabled = false;
   }
-}
-
-function show(d, clientMs) {
-  const best = d.moves[d.probabilities.indexOf(Math.max(...d.probabilities))];
-  for (const [move, el] of Object.entries(moveRows)) {
-    const i = d.moves.indexOf(move);
-    el.classList.toggle('off', i < 0);
-    el.classList.toggle('pick', move === best);
-    el.querySelector('i').style.width = i < 0 ? '0' : `${(d.probabilities[i] * 100).toFixed(1)}%`;
-    el.querySelector('.p').textContent = i < 0 ? '-' : d.probabilities[i].toFixed(2);
-  }
-  ui.model.textContent = `Jev · ${d.device} ${d.dtype} · ${d.forwardMs.toFixed(0)} ms fwd · ${clientMs.toFixed(0)} ms round trip`;
-  ui.model.dataset.first ??= clientMs.toFixed(0);
-}
+});
 
 // --- loop ----------------------------------------------------------------------------------------
 const clock = new THREE.Timer();
@@ -653,7 +640,7 @@ function frame(now) {
     speed = Math.min(SPEED.max, speed + SPEED.gain * dt);
     boost = Math.max(0, boost - BOOST.decay * dt);
     charge = Math.min(1, charge + CHARGE.perSecond * dt);
-    ask();
+    flightMs += dt * 1000;
   }
   if (mode === 'crashed') crashV = Math.max(0, crashV - crashV * 2.5 * dt - 4 * dt);
   const v = flying ? speed + boost : mode === 'ready' ? 22 : crashV;
@@ -761,11 +748,6 @@ function frame(now) {
     const tighten = Math.max(GAP.floor, 1 - distance / GAP.over);
     nextRowAt += between(GAP.min, GAP.max) * tighten;
   }
-  if (armed && flying) {
-    if (armed.row.cleared) armed = null;
-    else if ((armed.row.s - s) / Math.max(v, 1) <= LEAD[armed.move]) { steer(armed.move); armed = null; }
-  }
-
   // Collision: touch and you crash, miss and you pass. The hops is an ellipsoid (squashed when it
   // ducks or lands), each obstacle its own box, posts included; the test is exact.
   const sq = ship.userData.body.scale, cs = s - (along(0) + along(1)) / 2;
