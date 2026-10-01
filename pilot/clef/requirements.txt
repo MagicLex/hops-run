@@ -1,0 +1,2 @@
+# Clef-Flash is tested by Cloudflare with torch 2.11 and transformers 5.10.2 (Qwen3_5ForConditionalGeneration).
+transformers==5.10.2

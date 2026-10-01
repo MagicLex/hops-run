@@ -39,13 +39,17 @@ const cfg = {
 };
 if (!cfg.port || !cfg.databaseUrl || !(cfg.maxPlayers > 0)) throw new Error('missing setting: PORT, DATABASE_URL and MAX_PLAYERS are required');
 
+// Model pilots, as allowed by the table. A model pilot posts every run it flies, and each run
+// ranks on the board like a player's.
+const PILOTS = ['jev', 'jevworks', 'kumo', 'clef'];
+
 // The pool lives for the process and is closed on shutdown.
 const db = new pg.Pool({ connectionString: cfg.databaseUrl, max: 5 });
 await db.query(`
   CREATE TABLE IF NOT EXISTS runs (
     id          bigserial PRIMARY KEY,
     name        text NOT NULL,
-    pilot       text NOT NULL DEFAULT 'player' CHECK (pilot IN ('player', 'jev', 'jevworks')),
+    pilot       text NOT NULL DEFAULT 'player',
     model       text,
     distance_m  integer NOT NULL CHECK (distance_m >= 0),
     duration_ms integer NOT NULL CHECK (duration_ms > 0),
@@ -63,10 +67,9 @@ await db.query(`
     started_at timestamptz NOT NULL DEFAULT now()
   );
   CREATE INDEX IF NOT EXISTS run_starts_started_at ON run_starts (started_at);
+  ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_pilot_check;
+  ALTER TABLE runs ADD CONSTRAINT runs_pilot_check CHECK (pilot IN (${['player', ...PILOTS].map((p) => `'${p}'`).join(', ')}));
 `);
-// Model pilots, as allowed by the table. A model pilot posts every run it flies, and each run
-// ranks on the board like a player's.
-const PILOTS = ['jev', 'jevworks'];
 
 // A player's run is timed by the server: at takeoff the page asks for a run key, and the server
 // records when. The run posted with that key may last no longer than the time since its takeoff,
@@ -165,7 +168,12 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 // Line robot in front of a model pilot's name. The slab in the scene draws the same path.
 const ROBOT = '<svg class="bot" viewBox="0 0 16 16" aria-label="model"><path d="M8 1.5V4M3 4h10v8.5H3zM6 7.25h.5M9.5 7.25h.5M6 10h4M1.5 7v3M14.5 7v3"/></svg>';
 // Who built each model pilot, credited on its rows.
-const MAKERS = { jev: { name: 'TypeSafe', url: 'https://typesafe.ai' }, jevworks: { name: 'Hopsworks', url: 'https://www.hopsworks.ai' } };
+const MAKERS = {
+  jev: { name: 'TypeSafe', url: 'https://typesafe.ai' },
+  jevworks: { name: 'SemIf', url: 'https://github.com/TheoLeeCJ/SemIf' },
+  kumo: { name: 'NVIDIA', url: 'https://huggingface.co/nvidia/Kumo-Tabular' },
+  clef: { name: 'Cloudflare', url: 'https://huggingface.co/Cloudflare/clef-flash' },
+};
 const pilotTag = (r) => {
   const maker = MAKERS[r.pilot];
   return ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}${maker ? ` · by <a href="${maker.url}" target="_blank" rel="noopener">${maker.name}</a>` : ''}</i>`;

@@ -6,8 +6,10 @@
 //
 // Settings: config.json next to this file (written by deploy.py), overridden by env:
 //   GAME_URL      the game, e.g. https://game.hopsworks.ai/
-//   DECIDER       semif (pilot jevworks, the default) or jev (pilot jev)
+//   DECIDER       semif (pilot jevworks, the default), jev (pilot jev), kumo (pilot kumo) or clef (pilot clef)
 //   SEMIF_URL     path-routed predict URL of the semif deployment, for semif
+//   KUMO_URL      path-routed predict URL of the Kumo Tabular deployment (pilot/kumo), for kumo
+//   CLEF_URL      path-routed predict URL of the Clef-Flash deployment (pilot/clef), for clef
 //   JEV_URL       TypeSafe System One endpoint, e.g. https://api.typesafe.ai/v1/systemone, for jev
 //   JEV_MODEL     TypeSafe model, e.g. jev-latest, for jev
 //   TYPESAFE_API_KEY  TypeSafe API key, for jev
@@ -32,6 +34,8 @@ const cfg = {
   gameUrl: process.env.GAME_URL ?? stored.gameUrl,
   decider: process.env.DECIDER ?? stored.decider ?? 'semif',
   semifUrl: process.env.SEMIF_URL ?? stored.semifUrl,
+  kumoUrl: process.env.KUMO_URL ?? stored.kumoUrl,
+  clefUrl: process.env.CLEF_URL ?? stored.clefUrl,
   jevUrl: process.env.JEV_URL ?? stored.jevUrl,
   jevModel: process.env.JEV_MODEL ?? stored.jevModel,
   jevKey: process.env.TYPESAFE_API_KEY,
@@ -45,11 +49,16 @@ const cfg = {
   apiKey: process.env.HOPSWORKS_API_KEY,
   jwt: process.env.SECRETS_DIR && `${process.env.SECRETS_DIR}/token.jwt`,
 };
-const DECIDERS = { semif: { pilot: 'jevworks', needs: ['semifUrl'] }, jev: { pilot: 'jev', needs: ['jevUrl', 'jevModel', 'jevKey'] } };
+const DECIDERS = {
+  semif: { pilot: 'jevworks', needs: ['semifUrl'] },
+  jev: { pilot: 'jev', needs: ['jevUrl', 'jevModel', 'jevKey'] },
+  kumo: { pilot: 'kumo', needs: ['kumoUrl'] },
+  clef: { pilot: 'clef', needs: ['clefUrl'] },
+};
 if (!DECIDERS[cfg.decider]) throw new Error(`DECIDER: one of ${Object.keys(DECIDERS).join(', ')}`);
 const PILOT = DECIDERS[cfg.decider].pilot;
 const missing = ['gameUrl', 'viewport', 'token', 'port', ...DECIDERS[cfg.decider].needs].filter((k) => !cfg[k]);
-if (cfg.decider === 'semif' && !cfg.apiKey && !cfg.jwt) missing.push('HOPSWORKS_API_KEY or SECRETS_DIR');
+if (['semif', 'kumo', 'clef'].includes(cfg.decider) && !cfg.apiKey && !cfg.jwt) missing.push('HOPSWORKS_API_KEY or SECRETS_DIR');
 if (cfg.streamKey && (!cfg.streamUrl || !cfg.ffmpeg)) missing.push('STREAM_URL and FFMPEG, for STREAM_KEY');
 if (missing.length) throw new Error(`missing setting: ${missing.join(', ')}`);
 const [width, height] = cfg.viewport.split('x').map(Number);
@@ -78,39 +87,66 @@ function row({ lane, airborne, ahead }) {
 
 const stats = { runs: 0, best: 0, last: null, model: null, version: null, renderer: null, stream: cfg.streamKey ? 'starting' : 'off', streamRestarts: 0, lastDecision: Date.now() };
 
-async function decideSemif(state) {
-  const res = await fetch(cfg.semifUrl, {
+// A Hopsworks deployment answers with option ids, probabilities and its forward time: semif reads
+// the decision as text (row), Kumo Tabular as the game state itself.
+async function decideServed(url, input) {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: auth(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ inputs: [row(state)] }),
+    body: JSON.stringify({ inputs: [input] }),
     signal: AbortSignal.timeout(5000),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(`semif: HTTP ${res.status} ${text.slice(0, 200)}`);
+  if (!res.ok) throw new Error(`${cfg.decider}: HTTP ${res.status} ${text.slice(0, 200)}`);
   const [p] = JSON.parse(text).predictions;
   stats.lastDecision = Date.now();
   stats.model = String(p.model.revision ?? '').replace(/^hopsworks:/, '');
   return { pilot: PILOT, moves: p.option_ids, probabilities: p.probabilities, forwardMs: p.forward_seconds * 1000, model: stats.model };
 }
 
-// Jev answers the same decision as one Choice question: the options are the criteria. It reports
-// no forward time, so the round trip stands in.
+// Jev and Clef answer the same decision as one SystemOne Choice question: the options are the
+// criteria. Jev is TypeSafe's API; Clef is a Hopsworks deployment (pilot/clef) answering the same
+// request body, with its forward time. Jev reports none, so its round trip stands in.
+function choiceRequest(state, model) {
+  const { state: text, question, options } = row(state);
+  return { moves: options.map((o) => o.id), body: { model, state: text, questions: { move: { type: 'choice', instructions: question, criteria: Object.fromEntries(options.map((o) => [o.id, o.description])) } } } };
+}
 async function decideJev(state) {
-  const { state: text, question, options } = row(state), t0 = performance.now();
+  const { moves, body: request } = choiceRequest(state, cfg.jevModel), t0 = performance.now();
   const res = await fetch(cfg.jevUrl, {
     method: 'POST',
     headers: { Authorization: `Bearer ${cfg.jevKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: cfg.jevModel, state: text, questions: { move: { type: 'choice', instructions: question, criteria: Object.fromEntries(options.map((o) => [o.id, o.description])) } } }),
+    body: JSON.stringify(request),
     signal: AbortSignal.timeout(5000),
   });
   const body = await res.text();
   if (!res.ok) throw new Error(`jev: HTTP ${res.status} ${body.slice(0, 200)}`);
-  const d = JSON.parse(body), moves = options.map((o) => o.id);
+  const d = JSON.parse(body);
   stats.lastDecision = Date.now();
   stats.model = d.model;
   return { pilot: PILOT, moves, probabilities: moves.map((m) => d.answers.move.probabilities[m] ?? 0), forwardMs: performance.now() - t0, model: d.model };
 }
-const decide = { semif: decideSemif, jev: decideJev }[cfg.decider];
+async function decideClef(state) {
+  const { moves, body: request } = choiceRequest(state, 'clef-flash');
+  const res = await fetch(cfg.clefUrl, {
+    method: 'POST',
+    headers: { Authorization: auth(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ inputs: [request] }),
+    signal: AbortSignal.timeout(5000),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`clef: HTTP ${res.status} ${body.slice(0, 200)}`);
+  const [d] = JSON.parse(body).predictions;
+  stats.lastDecision = Date.now();
+  stats.model = String(d.model ?? '').replace(/^hopsworks:/, '');
+  return { pilot: PILOT, moves, probabilities: moves.map((m) => d.answers.move.probabilities[m] ?? 0), forwardMs: d.forward_seconds * 1000, model: stats.model };
+}
+const decide = {
+  semif: (state) => decideServed(cfg.semifUrl, row(state)),
+  kumo: (state) => decideServed(cfg.kumoUrl, state),
+  jev: decideJev,
+  clef: decideClef,
+}[cfg.decider];
 
 // --- runs ----------------------------------------------------------------------------------------
 const gameVersion = async () => (await (await fetch(new URL('health', cfg.gameUrl), { signal: AbortSignal.timeout(5000) })).json()).version;

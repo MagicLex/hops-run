@@ -40,13 +40,13 @@ At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and t
 
 Analytics: Umami (`analytics.hops.io`, website `Hops Run`) records page views and the events `run-start`, `crash` (`distance`), `board-submit` (`distance`, `rank`) and `queue-wait` (`position`).
 
-Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so decision models race on the same board. Players are `player`. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, jevworks: Hopsworks). A model pilot missing from the top runs is listed below them with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
+Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so decision models race on the same board. Players are `player`. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, jevworks: SemIf on Qwen3, kumo: NVIDIA, clef: Cloudflare). A model pilot missing from the top runs is listed below them with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
 
 ## jevworks pilot
 
 `pilot/` flies the live game for ever: a Hopsworks App on `lex-gpu` (project `jevworks`) runs the page in a headless Chromium rendering on a GPU, asks the `semif4b` deployment for every move, and posts each run to the board as `jevworks`. The page shows the decision (move probabilities, forward time, run number, best). When the game ships a new version the pilot reloads the page between runs.
 
-`DECIDER=jev` flies the same runner with TypeSafe's Jev API (one Choice question per move, pilot `jev`) instead of semif; it reads `JEV_URL`, `JEV_MODEL` and `TYPESAFE_API_KEY`.
+`DECIDER` picks the model: `semif` (pilot `jevworks`, the default), `jev` (TypeSafe's Jev API, one Choice question per move; `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`), `kumo` (NVIDIA Kumo Tabular deciding by in-context learning over game situations labelled by the rules, deployed from `pilot/kumo/`; `KUMO_URL`) or `clef` (Cloudflare Clef-Flash answering the same SystemOne request as Jev, deployed from `pilot/clef/`; `CLEF_URL`).
 
 The page enters pilot mode only when the runner exposes `jevworksDecide` and `jevworksFinished`; players never see it. The token lives in the Hopsworks secret `jevworks_pilot_token` of the deploying user; the game holds its sha256 in `PILOT_TOKEN_SHA256`.
 
