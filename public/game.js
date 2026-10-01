@@ -604,12 +604,13 @@ let asking = false;
 async function ask() {
   if (asking || mode !== 'flying') return;
   asking = true;
+  const t0 = performance.now();
   const ahead = rows.filter((r) => r.s > s + 0.8).sort((a, b) => a.s - b.s).map((r) => ({ distance: r.s - s, lanes: r.lanes }));
   try {
     const res = await fetch('api/decide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lane: LANES[lane], airborne, ahead }) });
     const d = await res.json();
     if (!res.ok) throw new Error(d.error);
-    show(d);
+    show(d, performance.now() - t0);
     if (pilot === 'jev' && mode === 'flying') {
       const move = d.moves[d.probabilities.indexOf(Math.max(...d.probabilities))];
       const next = rows.find((r) => !r.cleared && r.s > s);
@@ -623,7 +624,7 @@ async function ask() {
   }
 }
 
-function show(d) {
+function show(d, clientMs) {
   const best = d.moves[d.probabilities.indexOf(Math.max(...d.probabilities))];
   for (const [move, el] of Object.entries(moveRows)) {
     const i = d.moves.indexOf(move);
@@ -632,7 +633,8 @@ function show(d) {
     el.querySelector('i').style.width = i < 0 ? '0' : `${(d.probabilities[i] * 100).toFixed(1)}%`;
     el.querySelector('.p').textContent = i < 0 ? '-' : d.probabilities[i].toFixed(2);
   }
-  ui.model.textContent = `Jev · ${d.device} ${d.dtype} · ${d.forwardMs.toFixed(0)} ms fwd · ${d.roundTripMs.toFixed(0)} ms rtt`;
+  ui.model.textContent = `Jev · ${d.device} ${d.dtype} · ${d.forwardMs.toFixed(0)} ms fwd · ${clientMs.toFixed(0)} ms round trip`;
+  ui.model.dataset.first ??= clientMs.toFixed(0);
 }
 
 // --- loop ----------------------------------------------------------------------------------------

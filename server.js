@@ -2,15 +2,15 @@
 // down three lanes through random obstacle rows. The pilot is either the player or Jev: the
 // semif deployment reads the lanes ahead as text and picks the move from one forward pass.
 //
-// Settings: config.json next to this file (per-app env vars never reach the pod, see
-// hopsworks-animation issues A1), overridden by env for local runs:
+// Settings: config.json next to this file (per-app env vars never reach a Hopsworks App pod),
+// overridden by env for local runs:
 //   PORT | APP_PORT        listen port
-//   SEMIF_URL              KServe predict URL, e.g. http://<istio-ingress>/v1/models/semif:predict
-//   SEMIF_HOST             Host header routing to the predictor, e.g. semif.jevworks.hopsworks.ai
-//   HOPSWORKS_API_KEY      API key with the SERVING scope
+//   SEMIF_URL              path-routed predict URL of the semif deployment,
+//                          http://<istio-ingress>/v1/<project>/<deployment>/v1/models/<deployment>:predict
+//   HOPSWORKS_API_KEY      API key with the SERVING scope; inside a Hopsworks App the pod's own
+//                          JWT (SECRETS_DIR/token.jwt) is used instead
 
 import { existsSync, readFileSync } from 'node:fs';
-import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 
@@ -19,12 +19,13 @@ const stored = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
 const cfg = {
   port: Number(process.env.PORT ?? process.env.APP_PORT ?? stored.port),
   semifUrl: process.env.SEMIF_URL ?? stored.semifUrl,
-  semifHost: process.env.SEMIF_HOST ?? stored.semifHost,
   apiKey: process.env.HOPSWORKS_API_KEY ?? stored.apiKey,
+  jwt: process.env.SECRETS_DIR && `${process.env.SECRETS_DIR}/token.jwt`,
 };
-for (const [key, value] of Object.entries(cfg)) {
-  if (!value) throw new Error(`missing setting ${key}`);
-}
+if (!cfg.port || !cfg.semifUrl) throw new Error('missing setting: port and semifUrl are required');
+if (!cfg.apiKey && !cfg.jwt) throw new Error('missing setting: HOPSWORKS_API_KEY, or SECRETS_DIR inside a Hopsworks App');
+// The platform rotates the pod's JWT: read it per call.
+const auth = () => (cfg.apiKey ? `ApiKey ${cfg.apiKey}` : `Bearer ${readFileSync(cfg.jwt, 'utf8').trim()}`);
 
 const LANES = ['left', 'centre', 'right'];
 const HAS = { wall: 'a wall', low: 'a low block', bar: 'a bar', undefined: 'nothing, it is open' };
@@ -56,25 +57,9 @@ function row({ lane, airborne, ahead }) {
   };
 }
 
-// node:http, not fetch: fetch drops the Host header that Istio routes the predictor on.
-// One keep-alive agent for the server's lifetime, so decisions reuse their connection.
-const agent = new http.Agent({ keepAlive: true });
-function post(url, body) {
-  return new Promise((resolve, reject) => {
-    const req = http.request(url, {
-      method: 'POST',
-      agent,
-      headers: { Host: cfg.semifHost, Authorization: `ApiKey ${cfg.apiKey}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-    }, (res) => {
-      let text = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => { text += chunk; });
-      res.on('end', () => resolve({ status: res.statusCode, text }));
-    });
-    req.setTimeout(5000, () => req.destroy(new Error('semif: timeout after 5 s')));
-    req.on('error', reject);
-    req.end(body);
-  });
+async function post(url, body) {
+  const res = await fetch(url, { method: 'POST', headers: { Authorization: auth(), 'Content-Type': 'application/json' }, body, signal: AbortSignal.timeout(5000) });
+  return { status: res.status, text: await res.text() };
 }
 
 async function decide(state) {
