@@ -1,0 +1,16 @@
+{
+  "name": "hops-run",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "5.2.1",
+    "three": "0.186.1"
+  }
+}
