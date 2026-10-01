@@ -12,6 +12,8 @@
 //   UMAMI_WEBSITE_ID  Umami website id (analytics off when unset)
 //   PILOT_TOKEN_SHA256  sha256 (hex) of the bearer token a model pilot posts its runs with
 //                       (model pilot runs refused when unset)
+//   PUBLIC_URL        public origin, e.g. https://game.hopsworks.ai/: canonical link and share card
+//                     (no share card when unset)
 //   LIVE_YOUTUBE_CHANNEL  YouTube channel id streaming the jevworks pilot: the start screen shows
 //                         its live preview (none when unset)
 
@@ -30,6 +32,7 @@ const cfg = {
   databaseUrl: process.env.DATABASE_URL,
   boardSize: Number(process.env.BOARD_SIZE ?? 10),
   maxPlayers: Number(process.env.MAX_PLAYERS),
+  publicUrl: process.env.PUBLIC_URL ? new URL(process.env.PUBLIC_URL).href : null,
   liveChannel: process.env.LIVE_YOUTUBE_CHANNEL || null,
   pilotToken: process.env.PILOT_TOKEN_SHA256 ? Buffer.from(process.env.PILOT_TOKEN_SHA256, 'hex') : null,
   umami: process.env.UMAMI_SRC && process.env.UMAMI_WEBSITE_ID ? { src: process.env.UMAMI_SRC, id: process.env.UMAMI_WEBSITE_ID } : null,
@@ -122,13 +125,34 @@ const boardRows = (rows) => rows.length
   ? rows.map((r, i) => `<li><span class="rank">${String(i + 1).padStart(2, '0')}</span><span class="who">${r.pilot === 'player' ? '' : ROBOT}${esc(r.name)}${r.pilot === 'player' ? '' : ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}</i>`}</span><span class="dist">${r.distance_m} m <i class="ver">v${esc(r.game_version ?? '?')}</i></span></li>`).join('')
   : '<li class="empty">No runs yet. Be the first.</li>';
 
+// Shared links (Open Graph, X): the page's title and description, and public/og.jpg, a 1200x630
+// capture of the game.
+const DESCRIPTION = 'Fly the hops through turns, loops and corkscrews, and beat jevworks, the AI pilot flying live on the same leaderboard.';
+const shareCard = (url) => `<link rel="canonical" href="${esc(url)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Hopsworks">
+<meta property="og:title" content="Hops Run">
+<meta property="og:description" content="${esc(DESCRIPTION)}">
+<meta property="og:url" content="${esc(url)}">
+<meta property="og:image" content="${esc(new URL('og.jpg', url).href)}">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Hops Run: the hops flying down the track in the Hopsworks paper style">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Hops Run">
+<meta name="twitter:description" content="${esc(DESCRIPTION)}">
+<meta name="twitter:image" content="${esc(new URL('og.jpg', url).href)}">`;
+
 const page = (rows) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hops Run</title>
-<meta name="description" content="Fly the hops through a procedural track of turns, loops and corkscrews. Dodge, jump and duck, then put your name on the leaderboard.">
+<meta name="description" content="${esc(DESCRIPTION)}">
+<meta name="theme-color" content="#F1EFEA">
+${cfg.publicUrl ? shareCard(cfg.publicUrl) : ''}
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="fonts/GeistMono.ttf" as="font" type="font/ttf" crossorigin>
 <style>

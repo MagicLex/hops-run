@@ -18,6 +18,7 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 | `MAX_PLAYERS` | Players flying at once. Beyond it, visitors wait in a live queue |
 | `BOARD_SIZE` | Rows on the leaderboard, default 10 |
 | `PILOT_TOKEN_SHA256` | sha256 (hex) of the bearer token model pilots post their runs with. Pilot runs are refused when unset |
+| `PUBLIC_URL` | Public origin, e.g. `https://game.hopsworks.ai/`. Sets the canonical link and the share card (Open Graph, X) with `public/og.jpg`. No share card when unset |
 | `LIVE_YOUTUBE_CHANNEL` | YouTube channel id streaming the jevworks pilot. The start and crash screens show a muted preview of its live stream, linked to YouTube, unloaded during a run |
 | `UMAMI_SRC`, `UMAMI_WEBSITE_ID` | Umami tracker script and website id. Analytics is off when either is unset |
 
@@ -85,4 +86,5 @@ The game version is `version` in `package.json`, tagged `v<version>` in git. It 
 | `public/game.js` | three.js scene: track generator, hops, thruster, obstacles, speed gates, crash, chase camera, leaderboard form |
 | `public/fonts/` | Geist and Geist Mono (OFL) |
 | `public/hw.svg` | Hopsworks mark |
+| `public/og.jpg` | Share card image, 1200x630, a capture of the game |
 | `Dockerfile` | Node 20, runs as the `node` user |
