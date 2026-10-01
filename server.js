@@ -10,8 +10,10 @@
 //   BOARD_SIZE        rows on the leaderboard (default 10)
 //   UMAMI_SRC         Umami tracker script URL (analytics off when unset)
 //   UMAMI_WEBSITE_ID  Umami website id (analytics off when unset)
+//   PILOT_TOKEN_SHA256  sha256 (hex) of the bearer token a model pilot posts its runs with
+//                       (model pilot runs refused when unset)
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -26,6 +28,7 @@ const cfg = {
   databaseUrl: process.env.DATABASE_URL,
   boardSize: Number(process.env.BOARD_SIZE ?? 10),
   maxPlayers: Number(process.env.MAX_PLAYERS),
+  pilotToken: process.env.PILOT_TOKEN_SHA256 ? Buffer.from(process.env.PILOT_TOKEN_SHA256, 'hex') : null,
   umami: process.env.UMAMI_SRC && process.env.UMAMI_WEBSITE_ID ? { src: process.env.UMAMI_SRC, id: process.env.UMAMI_WEBSITE_ID } : null,
 };
 if (!cfg.port || !cfg.databaseUrl || !(cfg.maxPlayers > 0)) throw new Error('missing setting: PORT, DATABASE_URL and MAX_PLAYERS are required');
@@ -45,7 +48,11 @@ await db.query(`
   );
   ALTER TABLE runs ADD COLUMN IF NOT EXISTS game_version text;
   CREATE INDEX IF NOT EXISTS runs_distance ON runs (distance_m DESC, created_at);
+  CREATE INDEX IF NOT EXISTS runs_pilot_distance ON runs (pilot, distance_m DESC, created_at);
 `);
+// Model pilots, as allowed by the table. A model pilot posts every run it flies; the board keeps
+// only its best one, so it shows up there by beating players, never by volume.
+const PILOTS = ['jev', 'jevworks'];
 
 // Game limits, mirrored from public/game.js: no run covers more than top speed plus a full boost
 // for its whole duration. Anything beyond is refused.
@@ -55,10 +62,23 @@ const SUBMIT = { perMinute: 6 };
 
 async function board() {
   const { rows } = await db.query(
-    `SELECT name, pilot, model, distance_m, game_version, created_at FROM runs ORDER BY distance_m DESC, created_at ASC LIMIT $1`,
-    [cfg.boardSize],
+    `SELECT * FROM (
+       (SELECT name, pilot, model, distance_m, game_version, created_at FROM runs WHERE pilot = 'player' ORDER BY distance_m DESC, created_at LIMIT $1)
+       UNION ALL
+       SELECT b.* FROM unnest($2::text[]) AS p(pilot) CROSS JOIN LATERAL
+         (SELECT name, pilot, model, distance_m, game_version, created_at FROM runs WHERE runs.pilot = p.pilot ORDER BY distance_m DESC, created_at LIMIT 1) b
+     ) top ORDER BY distance_m DESC, created_at LIMIT $1`,
+    [cfg.boardSize, PILOTS],
   );
   return rows;
+}
+
+// A model pilot proves itself with the bearer token whose sha256 is PILOT_TOKEN_SHA256.
+function isPilot(req) {
+  const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+  if (!token || !cfg.pilotToken) return false;
+  const hash = createHash('sha256').update(token).digest();
+  return hash.length === cfg.pilotToken.length && timingSafeEqual(hash, cfg.pilotToken);
 }
 
 // Per-client submission budget, in memory: a minute window per hashed client address.
@@ -89,7 +109,7 @@ function seat(id) {
   return position ? { id, state: 'wait', position, heartbeatMs: SEAT.heartbeatMs } : { state: 'gone' };
 }
 
-const clientOf = (req) =>createHash('sha256').update(String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress).split(',')[0].trim()).digest('hex').slice(0, 16);
+const clientOf = (req) => createHash('sha256').update(String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress).split(',')[0].trim()).digest('hex').slice(0, 16);
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 // Line robot in front of a model pilot's name. The slab in the scene draws the same path.
@@ -131,6 +151,15 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .gauge { width: 140px; height: 2px; background: var(--rule); position: relative; }
 .gauge i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--fg); }
 .gauge i.full { background: var(--green); }
+.mind { width: min(320px, 44vw); display: grid; gap: 8px; }
+.mind[hidden], #pilot[hidden] { display: none; }
+.move { display: grid; grid-template-columns: 56px 1fr 52px; align-items: center; gap: 10px; font-family: 'Geist Mono', monospace; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.move .bar { height: 2px; background: var(--rule); position: relative; }
+.move .bar i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--dim); }
+.move .p { text-align: right; }
+.move.pick { color: var(--fg); }
+.move.pick .bar i { background: var(--green); }
+.move.off { opacity: 0.3; }
 #status.crash { color: var(--error); }
 #status.flying { color: var(--fg); }
 .center { position: fixed; inset: 0; display: grid; place-items: start center; pointer-events: none; padding: max(4vh, 28px) var(--m) var(--m); }
@@ -138,6 +167,7 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .prompt h1 { font-size: clamp(36px, 6vw, 72px); font-weight: 600; letter-spacing: -0.055em; margin: 0; line-height: 0.95; }
 .prompt[hidden] { display: none; }
 .keys { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; }
+.keys[hidden] { display: none; }
 .board { width: min(420px, 100%); margin: 6px 0 0; padding: 0; list-style: none; font-family: 'Geist Mono', monospace; font-size: 14px; text-align: left; background: color-mix(in srgb, var(--paper) 80%, transparent); border: 1px solid var(--rule); }
 .board li { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; padding: 7px 12px; border-top: 1px solid var(--rule); }
 .board li:first-child { border-top: 0; }
@@ -155,7 +185,7 @@ form.sign input { font: 500 15px 'Geist Mono', monospace; padding: 9px 12px; wid
 form.sign button { font: 500 13px 'Geist Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; padding: 9px 14px; border: 1px solid var(--fg); background: var(--fg); color: var(--paper); cursor: pointer; }
 .err { color: var(--error); }
 .in-world .board, .in-world .board-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-@media (max-width: 640px) { .row.bottom { flex-direction: column-reverse; align-items: stretch; } .right { text-align: left; justify-items: start; } form.sign input { width: 160px; } }
+@media (max-width: 640px) { .mind { width: 100%; } .row.bottom { flex-direction: column-reverse; align-items: stretch; } .right { text-align: left; justify-items: start; } form.sign input { width: 160px; } }
 </style>
 <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.js" } }</script>
 ${cfg.umami ? `<script defer src="${esc(cfg.umami.src)}" data-website-id="${esc(cfg.umami.id)}"></script>` : ''}
@@ -177,6 +207,10 @@ ${cfg.umami ? `<script defer src="${esc(cfg.umami.src)}" data-website-id="${esc(
       <div class="label jump">Jump <span class="gauge"><i id="charge"></i></span></div>
     </div>
     <div class="stack right">
+      <div class="mind" id="mind" hidden>
+        ${['left', 'hold', 'right', 'up', 'down'].map((m) => `<div class="move" data-move="${m}"><span>${m}</span><span class="bar"><i></i></span><span class="p">-</span></div>`).join('')}
+      </div>
+      <div class="label" id="pilot" hidden></div>
       <div class="label" id="status">Ready</div>
     </div>
   </div>
@@ -242,14 +276,29 @@ app.post('/api/runs', async (req, res, next) => {
     if (!Number.isFinite(distance) || !Number.isFinite(duration) || distance < 0 || duration <= 0) return res.status(400).json({ error: 'Distance and duration must be positive numbers.' });
     if (distance > (duration / 1000) * MAX_SPEED) return res.status(400).json({ error: 'That run is faster than the hops can fly.' });
     const client = clientOf(req);
+    if (req.headers.authorization) {
+      if (!isPilot(req)) return res.status(401).json({ error: 'Unknown pilot token.' });
+      const pilot = String(req.body?.pilot ?? ''), model = String(req.body?.model ?? '').slice(0, 64) || null;
+      if (!PILOTS.includes(pilot)) return res.status(400).json({ error: `Pilot: one of ${PILOTS.join(', ')}.` });
+      await db.query(
+        `INSERT INTO runs (name, pilot, model, distance_m, duration_ms, client, game_version) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [name, pilot, model, distance, duration, client, VERSION],
+      );
+      const { rows: [{ number, best }] } = await db.query(`SELECT count(*)::int AS number, max(distance_m) AS best FROM runs WHERE pilot = $1`, [pilot]);
+      const runs = await board();
+      return res.json({ number, best, runs, html: boardRows(runs) });
+    }
     if (!allowed(client)) return res.status(429).json({ error: 'Too many runs from here in the last minute. Try again shortly.' });
     const { rows: [run] } = await db.query(
       `INSERT INTO runs (name, distance_m, duration_ms, client, game_version) VALUES ($1, $2, $3, $4, $5) RETURNING id, distance_m, created_at`,
       [name, distance, duration, client, VERSION],
     );
+    // Rank as the board ranks: every player run, and each model pilot's best run.
     const { rows: [{ rank }] } = await db.query(
-      `SELECT count(*)::int + 1 AS rank FROM runs WHERE distance_m > $1 OR (distance_m = $1 AND created_at < $2)`,
-      [run.distance_m, run.created_at],
+      `SELECT 1 + (SELECT count(*) FROM runs WHERE pilot = 'player' AND (distance_m > $1 OR (distance_m = $1 AND created_at < $2)))::int
+                + (SELECT count(*) FROM unnest($3::text[]) AS p(pilot) WHERE EXISTS
+                    (SELECT 1 FROM runs WHERE runs.pilot = p.pilot AND (distance_m > $1 OR (distance_m = $1 AND created_at < $2))))::int AS rank`,
+      [run.distance_m, run.created_at, PILOTS],
     );
     const runs = await board();
     res.json({ id: run.id, rank, runs, html: boardRows(runs) });

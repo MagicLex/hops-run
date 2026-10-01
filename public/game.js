@@ -594,15 +594,18 @@ function reset() {
   slabS = s + SLAB.ahead;
 }
 
-// Umami custom events, when the page loads the tracker.
-const analytics = (event, data) => window.umami?.track(event, data);
+// A model pilot flies the page when the jevworks runner drives it: the runner exposes
+// jevworksDecide (state in, move probabilities out) and jevworksFinished (posts the run).
+const PILOT = typeof window.jevworksDecide === 'function';
+// Umami custom events, when the page loads the tracker; a model pilot's runs are not visits.
+const analytics = (event, data) => { if (!PILOT) window.umami?.track(event, data); };
 
 function start() {
   if (seat.state !== 'play') return;
   analytics('run-start');
   reset();
   mode = 'flying';
-  flightMs = 0; lastRun = null; submitted = false;
+  flightMs = 0; lastRun = null; submitted = false; pilot.armed = null;
   ui.prompt.hidden = true; form.hidden = true; result.hidden = true;
   ui.status.textContent = 'Flying'; ui.status.className = 'label flying';
 }
@@ -621,9 +624,11 @@ function crash(row, hitMesh) {
   ui.status.textContent = `Crashed at ${Math.round(distance)} m`; ui.status.className = 'label crash';
   lastRun = { distance: Math.round(distance), durationMs: Math.round(flightMs) };
   analytics('crash', { distance: lastRun.distance });
+  if (PILOT) finished(lastRun);
   setTimeout(() => {
     if (mode !== 'crashed') return;
     ui.prompt.querySelector('h1').textContent = `${lastRun.distance} m`;
+    if (PILOT) { result.hidden = false; ui.prompt.hidden = false; return; }
     result.hidden = false; result.textContent = 'Put your run on the board';
     form.hidden = false;
     ui.prompt.hidden = false;
@@ -732,6 +737,67 @@ addEventListener('pagehide', () => {
 addEventListener('pageshow', (e) => { if (e.persisted) joinSeat(); }); // back from the page cache
 joinSeat();
 
+// --- model pilot ---------------------------------------------------------------------------------
+// The pilot is asked for a move whenever no request is in flight. Jump and duck are armed against
+// the nearest row and fired LEAD seconds before it, so the hops tops its arc, or is lowest, as it
+// crosses; lane changes apply at once. After a crash the run is posted, and the pilot takes off
+// again RESTART_MS later, time enough to see the crash and the result.
+const LEAD = { up: 0.3, down: 0.25 }, RESTART_MS = 4000;
+const mind = document.getElementById('mind'), pilotEl = document.getElementById('pilot');
+const moveEls = Object.fromEntries([...mind.querySelectorAll('.move')].map((el) => [el.dataset.move, el]));
+const pilot = { asking: false, armed: null, restartAt: 0, model: '', record: '' };
+const clean = (text) => String(text).replace(/[<>&]/g, '');
+function showPilot(timing = '') {
+  pilotEl.textContent = ['jevworks', pilot.model, pilot.record, timing].filter(Boolean).join(' · ');
+}
+async function ask() {
+  if (pilot.asking || mode !== 'flying') return;
+  pilot.asking = true;
+  const ahead = rows.filter((r) => r.s > s + 0.8).sort((a, b) => a.s - b.s).map((r) => ({ distance: r.s - s, lanes: r.lanes }));
+  try {
+    const d = await window.jevworksDecide({ lane: LANES[lane], airborne, ahead });
+    const best = d.moves[d.probabilities.indexOf(Math.max(...d.probabilities))];
+    for (const [move, el] of Object.entries(moveEls)) {
+      const i = d.moves.indexOf(move);
+      el.classList.toggle('off', i < 0);
+      el.classList.toggle('pick', move === best);
+      el.querySelector('i').style.width = i < 0 ? '0' : `${(d.probabilities[i] * 100).toFixed(1)}%`;
+      el.querySelector('.p').textContent = i < 0 ? '-' : d.probabilities[i].toFixed(2);
+    }
+    pilot.model = d.model;
+    showPilot(`${d.forwardMs.toFixed(0)} ms`);
+    if (mode === 'flying') {
+      const next = rows.find((r) => !r.cleared && r.s > s);
+      if ((best === 'up' || best === 'down') && next) pilot.armed = { move: best, row: next };
+      else steer(best);
+    }
+  } catch (err) {
+    pilotEl.innerHTML = `<span class="err">Pilot unavailable: ${clean(err.message).slice(0, 80)}</span>`;
+  } finally {
+    pilot.asking = false;
+  }
+}
+async function finished(run) {
+  pilot.restartAt = Infinity;
+  result.textContent = 'Posting the run';
+  try {
+    const d = await window.jevworksFinished(run);
+    if (d.error) throw new Error(d.error);
+    boardEl.innerHTML = d.html;
+    pilot.record = `run ${d.number} · best ${d.best} m`;
+    result.textContent = `Run ${d.number} · ${run.distance} m · best ${d.best} m`;
+    showPilot();
+  } catch (err) {
+    result.innerHTML = `<span class="err">Run not posted: ${clean(err.message).slice(0, 80)}</span>`;
+  }
+  pilot.restartAt = performance.now() + RESTART_MS;
+}
+if (PILOT) {
+  mind.hidden = false; pilotEl.hidden = false;
+  document.querySelector('.keys').hidden = true;
+  showPilot();
+}
+
 // --- loop ----------------------------------------------------------------------------------------
 const clock = new THREE.Timer();
 const camUp = V(0, 1, 0), look = V(), camF = { p: V(), q: new THREE.Quaternion(), fwd: V(), up: V(), right: V() };
@@ -749,7 +815,9 @@ function frame(now) {
     boost = Math.max(0, boost - BOOST.decay * dt);
     charge = Math.min(1, charge + CHARGE.perSecond * dt);
     flightMs += dt * 1000;
+    if (PILOT) ask();
   }
+  if (PILOT && !flying && seat.state === 'play' && now >= pilot.restartAt) start();
   if (mode === 'crashed') crashV = Math.max(0, crashV - crashV * 2.5 * dt - 4 * dt);
   const v = flying ? speed + boost : mode === 'ready' ? 22 : crashV;
   distance += flying ? v * dt : 0;
@@ -856,6 +924,11 @@ function frame(now) {
     const tighten = Math.max(GAP.floor, 1 - distance / GAP.over);
     nextRowAt += between(GAP.min, GAP.max) * tighten;
   }
+  if (pilot.armed && flying) {
+    if (pilot.armed.row.cleared) pilot.armed = null;
+    else if ((pilot.armed.row.s - s) / Math.max(v, 1) <= LEAD[pilot.armed.move]) { steer(pilot.armed.move); pilot.armed = null; }
+  }
+
   // Collision: touch and you crash, miss and you pass. The hops is an ellipsoid (squashed when it
   // ducks or lands), each obstacle its own box, posts included; the test is exact.
   const sq = ship.userData.body.scale, cs = s - (along(0) + along(1)) / 2;

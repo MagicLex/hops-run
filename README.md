@@ -17,6 +17,7 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 | `DATABASE_URL` | Postgres connection string. The `runs` table is created at start if missing |
 | `MAX_PLAYERS` | Players flying at once. Beyond it, visitors wait in a live queue |
 | `BOARD_SIZE` | Rows on the leaderboard, default 10 |
+| `PILOT_TOKEN_SHA256` | sha256 (hex) of the bearer token model pilots post their runs with. Pilot runs are refused when unset |
 | `UMAMI_SRC`, `UMAMI_WEBSITE_ID` | Umami tracker script and website id. Analytics is off when either is unset |
 
 ## API
@@ -25,7 +26,7 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 | --- | --- |
 | `GET /` | The game, with the leaderboard rendered in the page |
 | `GET /api/board` | `{ runs, html }`: the top runs, and the same rows as rendered on the page |
-| `POST /api/runs` | `{ name, distance, durationMs }` adds a run, returns `{ id, rank, runs, html }` |
+| `POST /api/runs` | `{ name, distance, durationMs }` adds a run, returns `{ id, rank, runs, html }`. With `Authorization: Bearer <pilot token>` and `{ pilot, model }` it adds a model pilot's run and returns `{ number, best, runs, html }` |
 | `POST /api/seat` | `{}` joins, `{ id, active }` is the heartbeat. Returns `{ id, state, position, heartbeatMs }`, `state` one of `play`, `wait`, `gone` |
 | `POST /api/seat/leave` | `{ id }` frees the seat or the place in line |
 | `GET /health` | `{ status, version, players, waiting, maxPlayers }` when the database answers |
@@ -36,7 +37,19 @@ At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and t
 
 Analytics: Umami (`analytics.hops.io`, website `Hops Run`) records page views and the events `run-start`, `crash` (`distance`), `board-submit` (`distance`, `rank`) and `queue-wait` (`position`).
 
-Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so decision models can race on the same board. Players are `player`; the Jev pilot from earlier work is on the `jev-pilot` tag.
+Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so decision models race on the same board. Players are `player`. A model pilot posts every run it flies, numbered; the board shows every player run and only the best run of each model pilot, marked with a robot. The Jev pilot from earlier work is on the `jev-pilot` tag.
+
+## jevworks pilot
+
+`pilot/` flies the live game for ever: a Hopsworks App on `lex-gpu` (project `jevworks`) runs the page in a headless Chromium rendering on a GPU, asks the `semif4b` deployment for every move, and posts each run to the board as `jevworks`. The page shows the decision (move probabilities, forward time, run number, best). When the game ships a new version the pilot reloads the page between runs.
+
+The page enters pilot mode only when the runner exposes `jevworksDecide` and `jevworksFinished`; players never see it. The token lives in the Hopsworks secret `jevworks_pilot_token` of the deploying user; the game holds its sha256 in `PILOT_TOKEN_SHA256`.
+
+```sh
+HOPSWORKS_HOST=10.117.191.130 HOPSWORKS_PROJECT=jevworks HOPSWORKS_API_KEY=... python pilot/deploy.py   # --no-gpu: SwiftShader, 640x360
+```
+
+`GET /health` on the App returns the pilot's runs, best, last distance, model and game version, and 503 when no decision came in 5 minutes.
 
 ## Deploy
 
@@ -64,7 +77,8 @@ The game version is `version` in `package.json`, tagged `v<version>` in git. It 
 
 | Path | Role |
 | --- | --- |
-| `server.js` | Express server: the page with the leaderboard, the leaderboard API, Postgres |
+| `server.js` | Express server: the page with the leaderboard, the leaderboard API, seats, Postgres |
+| `pilot/` | jevworks pilot: `runner.js` (Chromium + semif), `start.sh` (App entrypoint), `deploy.py` |
 | `public/game.js` | three.js scene: track generator, hops, thruster, obstacles, speed gates, crash, chase camera, leaderboard form |
 | `public/fonts/` | Geist and Geist Mono (OFL) |
 | `public/hw.svg` | Hopsworks mark |
