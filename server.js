@@ -57,18 +57,33 @@ await db.query(`
   CREATE INDEX IF NOT EXISTS runs_pilot_distance ON runs (pilot, distance_m DESC, created_at);
   ALTER TABLE runs ADD COLUMN IF NOT EXISTS run_key uuid;
   CREATE UNIQUE INDEX IF NOT EXISTS runs_run_key ON runs (run_key);
+  CREATE TABLE IF NOT EXISTS run_starts (
+    run_key    uuid PRIMARY KEY,
+    client     text NOT NULL,
+    started_at timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS run_starts_started_at ON run_starts (started_at);
 `);
 // Model pilots, as allowed by the table. A model pilot posts every run it flies, and each run
 // ranks on the board like a player's.
 const PILOTS = ['jev', 'jevworks'];
 
-// Game limits, mirrored from public/game.js: no run covers more than top speed plus a full boost
-// for its whole duration. Anything beyond is refused.
-const MAX_SPEED = 160 + 45; // m/s
+// A player's run is timed by the server: at takeoff the page asks for a run key, and the server
+// records when. The run posted with that key may last no longer than the time since its takeoff,
+// and cover no more than the hops can fly in that time: the speed curve, plus a boost gate at
+// most every PHYSICS.gateGap metres (each worth kick^2 / (2 decay) metres), with a margin.
+// Mirrored from public/game.js (SPEED, BOOST, PAD_GAP).
+const PHYSICS = { start: 45, max: 160, gain: 1.6, kick: 45, decay: 18, gateGap: 140, margin: 1.05, clockSlackMs: 3000 };
+function maxDistance(durationMs) {
+  const P = PHYSICS, t = durationMs / 1000, ramp = (P.max - P.start) / P.gain;
+  const base = t <= ramp ? P.start * t + (P.gain * t * t) / 2 : P.start * ramp + (P.gain * ramp * ramp) / 2 + P.max * (t - ramp);
+  const perGate = P.kick ** 2 / (2 * P.decay);
+  return ((base + perGate) / (1 - perGate / P.gateGap)) * P.margin;
+}
 const NAME = /^[\p{L}\p{N} ._-]{1,20}$/u;
-const SUBMIT = { perMinute: 6 };
-// A run carries the key its page drew at the crash: posting it again (a retry, a second click)
-// records nothing new and answers with the run already recorded.
+const SUBMIT = { perMinute: 6 }, STARTS = { perMinute: 30, keepHours: 24 };
+// Posting a run key again (a retry, a second click) records nothing new and answers with the run
+// already recorded.
 const RUN_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const findRun = async (runKey) => (await db.query(`SELECT id, distance_m, created_at FROM runs WHERE run_key = $1`, [runKey])).rows[0];
 async function recordRun({ name, pilot, model, distance, duration, client, runKey }) {
@@ -113,14 +128,17 @@ function isPilot(req) {
   return hash.length === cfg.pilotToken.length && timingSafeEqual(hash, cfg.pilotToken);
 }
 
-// Per-client submission budget, in memory: a minute window per hashed client address.
-const recent = new Map();
-function allowed(client) {
-  const now = Date.now(), hits = (recent.get(client) ?? []).filter((t) => now - t < 60_000);
-  if (hits.length >= SUBMIT.perMinute) return false;
-  recent.set(client, [...hits, now]);
-  return true;
+// Per-client budgets, in memory: a minute window per hashed client address.
+function budget(perMinute) {
+  const recent = new Map();
+  return (client) => {
+    const now = Date.now(), hits = (recent.get(client) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= perMinute) return false;
+    recent.set(client, [...hits, now]);
+    return true;
+  };
 }
+const allowed = budget(SUBMIT.perMinute), startAllowed = budget(STARTS.perMinute);
 // Seats: at most MAX_PLAYERS sessions play at once, the rest wait in arrival order. A page holds
 // its session with a heartbeat; a session silent for TTL is dropped. A seated player idle for IDLE
 // gives up the seat, only when someone is waiting. In memory: a restart empties seats and queue,
@@ -367,12 +385,23 @@ app.post('/api/seat/leave', (req, res) => {
 app.get('/api/board', async (_req, res, next) => {
   try { const runs = await board(); res.json({ runs, html: boardRows(runs) }); } catch (e) { next(e); }
 });
+// Takeoff: a run key for the run just started, timed from now.
+app.post('/api/runs/start', async (req, res, next) => {
+  try {
+    const client = clientOf(req);
+    if (!startAllowed(client)) return res.status(429).json({ error: 'Too many runs from here in the last minute. Try again shortly.' });
+    const runKey = randomUUID();
+    await db.query(`DELETE FROM run_starts WHERE started_at < now() - make_interval(hours => $1)`, [STARTS.keepHours]);
+    await db.query(`INSERT INTO run_starts (run_key, client) VALUES ($1, $2)`, [runKey, client]);
+    res.json({ runKey });
+  } catch (e) { next(e); }
+});
 app.post('/api/runs', async (req, res, next) => {
   try {
     const name = String(req.body?.name ?? '').trim(), distance = Math.floor(Number(req.body?.distance)), duration = Math.floor(Number(req.body?.durationMs));
     if (!NAME.test(name)) return res.status(400).json({ error: 'Name: 1 to 20 letters, digits, spaces, dots, dashes or underscores.' });
     if (!Number.isFinite(distance) || !Number.isFinite(duration) || distance < 0 || duration <= 0) return res.status(400).json({ error: 'Distance and duration must be positive numbers.' });
-    if (distance > (duration / 1000) * MAX_SPEED) return res.status(400).json({ error: 'That run is faster than the hops can fly.' });
+    if (distance > maxDistance(duration)) return res.status(400).json({ error: 'That run is further than the hops can fly in its time.' });
     const runKey = req.body?.runKey == null ? null : String(req.body.runKey);
     if (runKey !== null && !RUN_KEY.test(runKey)) return res.status(400).json({ error: 'Run key: a UUID.' });
     const client = clientOf(req);
@@ -385,8 +414,14 @@ app.post('/api/runs', async (req, res, next) => {
       const runs = await board();
       return res.json({ number, best, runs, html: boardRows(runs) });
     }
-    const known = runKey && await findRun(runKey);
-    if (!known && !allowed(client)) return res.status(429).json({ error: 'Too many runs from here in the last minute. Try again shortly.' });
+    if (!runKey) return res.status(400).json({ error: 'This page is out of date. Reload it to put runs on the board.' });
+    const known = await findRun(runKey);
+    if (!known) {
+      const { rows: [start] } = await db.query(`SELECT (extract(epoch FROM now() - started_at) * 1000)::bigint AS elapsed_ms FROM run_starts WHERE run_key = $1`, [runKey]);
+      if (!start) return res.status(400).json({ error: 'Unknown run. Fly a run to put it on the board.' });
+      if (duration > Number(start.elapsed_ms) + PHYSICS.clockSlackMs) return res.status(400).json({ error: 'That run lasted longer than the time since it took off.' });
+      if (!allowed(client)) return res.status(429).json({ error: 'Too many runs from here in the last minute. Try again shortly.' });
+    }
     const run = known || await recordRun({ name, pilot: 'player', model: null, distance, duration, client, runKey });
     const { rows: [{ rank }] } = await db.query(
       `SELECT count(*)::int + 1 AS rank FROM runs WHERE distance_m > $1 OR (distance_m = $1 AND created_at < $2)`,

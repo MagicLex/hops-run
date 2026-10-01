@@ -28,12 +28,13 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 | --- | --- |
 | `GET /` | The game, with the leaderboard rendered in the page |
 | `GET /api/board` | `{ runs, html }`: the top runs, and the same rows as rendered on the page |
-| `POST /api/runs` | `{ name, distance, durationMs, runKey }` adds a run, returns `{ id, rank, runs, html }`. `runKey` is a UUID the page draws at the crash: a second post with the same key records nothing and returns the run already recorded, so the page retries safely through a restart. With `Authorization: Bearer <pilot token>` and `{ pilot, model }` it adds a model pilot's run and returns `{ number, best, runs, html }` |
+| `POST /api/runs/start` | `{ runKey }`: the key of the run taking off. The server records the takeoff time |
+| `POST /api/runs` | `{ name, distance, durationMs, runKey }` adds a player's run, returns `{ id, rank, runs, html }`. A second post with the same key records nothing and returns the run already recorded, so the page retries safely through a restart. With `Authorization: Bearer <pilot token>` and `{ pilot, model }` it adds a model pilot's run and returns `{ number, best, runs, html }` |
 | `POST /api/seat` | `{}` joins, `{ id, active }` is the heartbeat. Returns `{ id, state, position, heartbeatMs }`, `state` one of `play`, `wait`, `gone` |
 | `POST /api/seat/leave` | `{ id }` frees the seat or the place in line |
 | `GET /health` | `{ status, version, players, waiting, maxPlayers }` when the database answers |
 
-A run is refused when its name is not 1 to 20 letters, digits, spaces, dots, dashes or underscores, or when its distance is more than top speed plus a full boost over its duration. Each client address may add 6 runs a minute.
+A player's run is timed by the server: it needs a key from `POST /api/runs/start`, may last no longer than the time since that takeoff, and may cover no more than the hops can fly in its duration (the speed curve plus a boost gate at most every 140 m, with a 5% margin; constants mirrored from `public/game.js`). A run is also refused when its name is not 1 to 20 letters, digits, spaces, dots, dashes or underscores. Each client address may take off 30 times and add 6 runs a minute.
 
 At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and the start screen shows their place in line. A page holds its seat with a heartbeat every 10 s and loses it after 30 s of silence. A seated player idle for 2 minutes gives up the seat when someone is waiting. Seats and queue live in the server process: a restart empties them and pages join again on their next heartbeat. Each client address may hold 8 seats or places in line.
 

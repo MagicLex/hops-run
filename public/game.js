@@ -609,6 +609,17 @@ function showLive(on) {
   liveFrame.src = on ? liveFrame.dataset.src : 'about:blank';
 }
 
+// Takeoff asks the server for the run's key: the server times the run from now, and the run
+// posted with that key may not last longer. A model pilot is trusted by its token and draws its own.
+let runKey = null;
+async function takeoff() {
+  if (PILOT) return crypto.randomUUID();
+  try {
+    const res = await fetch('api/runs/start', { method: 'POST' });
+    return res.ok ? (await res.json()).runKey : null;
+  } catch { return null; } // offline: the run can be flown, not posted
+}
+
 function start() {
   if (seat.state !== 'play') return;
   analytics('run-start');
@@ -617,6 +628,7 @@ function start() {
   mode = 'flying';
   document.body.classList.add('flying');
   flightMs = 0; lastRun = null; submitted = false; pilot.armed = null;
+  runKey = takeoff();
   ui.prompt.hidden = true; form.hidden = true; result.hidden = true;
   ui.status.textContent = 'Flying'; ui.status.className = 'label flying';
 }
@@ -634,7 +646,7 @@ function crash(row, hitMesh) {
   flash.style.transition = 'none'; flash.style.opacity = '0.35';
   requestAnimationFrame(() => { flash.style.transition = 'opacity 0.9s ease-out'; flash.style.opacity = '0'; });
   ui.status.textContent = `Crashed at ${Math.round(distance)} m`; ui.status.className = 'label crash';
-  lastRun = { distance: Math.round(distance), durationMs: Math.round(flightMs), runKey: crypto.randomUUID() };
+  lastRun = { distance: Math.round(distance), durationMs: Math.round(flightMs), runKey };
   analytics('crash', { distance: lastRun.distance });
   if (PILOT) finished(lastRun);
   setTimeout(() => {
@@ -714,7 +726,9 @@ form.addEventListener('submit', async (e) => {
   try { localStorage.setItem('hops-run-name', name); } catch { /* storage blocked */ }
   form.querySelector('button').disabled = true;
   try {
-    const d = await postRun({ name, ...lastRun });
+    const key = await lastRun.runKey;
+    if (!key) throw new Error('The server could not time this run (offline at takeoff), so it cannot go on the board.');
+    const d = await postRun({ name, ...lastRun, runKey: key });
     submitted = true;
     analytics('board-submit', { distance: lastRun.distance, rank: d.rank });
     boardEl.innerHTML = d.html;
@@ -816,7 +830,7 @@ async function finished(run) {
   pilot.restartAt = Infinity;
   result.textContent = 'Posting the run';
   try {
-    const d = await window.jevworksFinished(run);
+    const d = await window.jevworksFinished({ ...run, runKey: await run.runKey });
     if (d.error) throw new Error(d.error);
     boardEl.innerHTML = d.html;
     pilot.record = `run ${d.number} · best ${d.best} m`;
