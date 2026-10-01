@@ -293,6 +293,13 @@ ${cfg.liveChannel ? liveCard(cfg.liveChannel) : ''}
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '2kb' }));
+// Link-preview crawlers are logged with what they got, so a missing share card can be traced.
+const PREVIEW_BOTS = /LinkedInBot|facebookexternalhit|Facebot|WhatsApp|Slackbot|Twitterbot|TelegramBot|Discordbot|Googlebot|bingbot|Applebot/i;
+app.use((req, res, next) => {
+  const bot = PREVIEW_BOTS.exec(req.headers['user-agent'] ?? '')?.[0];
+  if (bot) res.on('finish', () => console.log(`preview ${bot} ${req.method} ${req.originalUrl} ${res.statusCode}`));
+  next();
+});
 app.get('/', async (_req, res, next) => {
   try { res.type('html').send(page(await board())); } catch (e) { next(e); }
 });
