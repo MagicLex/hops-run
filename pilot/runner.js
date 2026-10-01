@@ -191,10 +191,10 @@ async function finished(run) {
 // ffmpeg's messages are logged with the key redacted.
 // YouTube binds an ingest to the broadcast open when it connects: one that connects while YouTube
 // is still closing the previous broadcast (after a long drop) stays bound to it and never goes
-// live. With STREAM_CHANNEL, the channel's public live page is checked every minute; off air for
-// offAirChecks checks in a row while ffmpeg runs, the ingest is reconnected, at most every
-// reconnectMs.
-const STREAM = { fps: 30, bitrate: '6M', backlogBytes: 8 << 20, holdMs: 100, checkMs: 60_000, offAirChecks: 3, reconnectMs: 10 * 60_000 };
+// live; a new connection binds to the current one at once. With STREAM_CHANNEL, the channel's
+// public live page is checked every checkMs; off air for offAirChecks checks in a row while ffmpeg
+// runs, the ingest is reconnected, at most every reconnectMs.
+const STREAM = { fps: 30, bitrate: '6M', backlogBytes: 8 << 20, holdMs: 100, checkMs: 30_000, offAirChecks: 3, reconnectMs: 3 * 60_000 };
 const onAir = async () => {
   const res = await fetch(`https://www.youtube.com/channel/${cfg.streamChannel}/live`, { headers: { 'Accept-Language': 'en', Cookie: 'CONSENT=YES+1' }, signal: AbortSignal.timeout(15_000) });
   return /<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=/.test(await res.text());

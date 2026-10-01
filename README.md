@@ -58,7 +58,7 @@ HOPSWORKS_HOST=10.117.191.130 HOPSWORKS_PROJECT=jevworks HOPSWORKS_API_KEY=... p
 
 With the Hopsworks secret `jevworks_youtube_key` (a YouTube stream key), the App also streams the page live: Chromium's screencast into ffmpeg, NVENC h264 1080p30 at 6 Mbit/s with a silent audio track, over RTMPS to YouTube. One ffmpeg runs for the life of the App: page reloads and browser relaunches never drop the ingest (the last frame is held between pages); only a redeploy of the App does. `--no-stream` deploys without it.
 
-When `--stream-channel` (default: the channel the game previews) shows no live video for 3 minutes while the ingest runs, the runner reconnects the ingest, at most every 10 minutes: an ingest that connects while YouTube is still closing the previous broadcast stays bound to it and never goes live.
+When `--stream-channel` (default: the channel the game previews) shows no live video for 90 seconds while the ingest runs, the runner reconnects the ingest, at most every 3 minutes: an ingest that connects while YouTube is still closing the previous broadcast stays bound to it and never goes live.
 
 `GET /health` on the App returns the pilot flying now, each pilot's runs, best, last distance and model, the game version, WebGL renderer and stream state, and 503 when no decision came in 5 minutes. `GET /frame.jpg` returns what the page shows right now.
 
