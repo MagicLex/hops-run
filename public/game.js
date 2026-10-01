@@ -26,7 +26,10 @@ const BOOST = { kick: 45, decay: 18 }; // m/s added by a gate, m/s lost per s
 const GAP = { min: 42, max: 74, floor: 0.55, over: 5000 }; // metres between rows, shrinking to floor x over `over` m
 const PAD_GAP = { min: 140, max: 260 };
 const STEP = 1, CHUNK = 64, RIB = 4, ARCH = 160; // metres per track sample, per mesh chunk, between ribs, between arches
-const UNLOCK = { side: 300, cork: 500, loop: 900 }; // metres before side banks, corkscrews and loops can appear
+const ALTITUDE = 15; // metres the generator steers the track back towards
+const UNLOCK = { side: 300, wallride: 400, cork: 500, invert: 700, loop: 900 }; // metres before each segment can appear
+// Segments where the frame is meant to lean: the upright correction stays off through them.
+const LEANING = new Set(['turn', 'side', 'cork', 'loop', 'roll', 'held']);
 const HOVER = 1.3, GRAVITY = 45;
 const SPRING = { k: 260, c: 26 }; // lateral spring stiffness and damping
 const JUMP = 16, DUCK = { hover: 0.45, time: 0.7, flat: 0.35, narrow: 0.15 }; // m/s up; hover height, seconds, and how much the hops squeezes when ducking
@@ -80,7 +83,7 @@ const ease = (total, len) => (u) => (total / len) * (1 - Math.cos(2 * Math.PI * 
 const wave = (peak, len) => (u) => ((peak * Math.PI) / len) * Math.sin(2 * Math.PI * u);
 const zero = () => 0;
 const track = { P: [], Q: [], kind: [], pitch: [] };
-const gen = { p: new THREE.Vector3(), q: new THREE.Quaternion(), seg: null, at: 0, minY: 0 };
+const gen = { p: new THREE.Vector3(), q: new THREE.Quaternion(), seg: null, at: 0, minY: 0, queue: [] };
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const AX = { fwd: V(0, 0, -1), up: V(0, 1, 0), right: V(1, 0, 0) };
 const tv = new THREE.Vector3(), tq = new THREE.Quaternion(), te = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -91,7 +94,9 @@ function pickSegment() {
   const heading = Math.atan2(-fwd.x, -fwd.z); // 0 when the track runs down -z
   const kinds = [['straight', 3], ['turn', 4], ['hill', 4]];
   if (s > UNLOCK.side) kinds.push(['side', 2]);
+  if (s > UNLOCK.wallride) kinds.push(['wallride', 1.2]);
   if (s > UNLOCK.cork) kinds.push(['cork', 1.2]);
+  if (s > UNLOCK.invert) kinds.push(['invert', 1]);
   if (s > UNLOCK.loop) kinds.push(['loop', 1]);
   let roll = rng() * kinds.reduce((a, [, w]) => a + w, 0), kind = 'straight';
   for (const [k, w] of kinds) { if ((roll -= w) <= 0) { kind = k; break; } }
@@ -103,7 +108,7 @@ function pickSegment() {
   }
   if (kind === 'side') {
     // A hard turn banked onto its side, roller coaster style: near vertical mid-corner.
-    const dir = Math.abs(heading) > 0.7 ? -Math.sign(heading) : side(), len = between(120, 190);
+    const dir = Math.abs(heading) > 0.7 ? -Math.sign(heading) : side(), len = between(200, 300);
     return { kind, len, yaw: ease(dir * between(0.9, 1.6), len), pitch: zero, roll: wave(dir * between(1.3, 1.57), len) };
   }
   if (kind === 'hill') {
@@ -111,23 +116,42 @@ function pickSegment() {
     const dir = gen.p.y < -5 ? 1 : gen.p.y > 35 ? -1 : side(), len = between(90, 170);
     return { kind, len, yaw: zero, pitch: wave(dir * between(0.22, 0.45), len), roll: zero };
   }
-  if (kind === 'cork') { const len = between(150, 210); return { kind, len, yaw: zero, pitch: zero, roll: ease(side() * Math.PI * 2, len) }; }
-  if (kind === 'loop') { const len = between(160, 200); return { kind, len, yaw: ease(side() * between(0.3, 0.5), len), pitch: ease(Math.PI * 2, len), roll: zero }; }
+  if (kind === 'wallride' || kind === 'invert') {
+    // Roll onto the side or upside down, stay there a while, roll back.
+    const angle = kind === 'invert' ? Math.PI * side() : (Math.PI / 2) * side(), turn = between(120, 170);
+    return [
+      { kind: 'roll', len: turn, yaw: zero, pitch: zero, roll: ease(angle, turn) },
+      { kind: 'held', len: between(200, 400), yaw: zero, pitch: zero, roll: zero },
+      { kind: 'roll', len: turn, yaw: zero, pitch: zero, roll: ease(-angle, turn) },
+    ];
+  }
+  if (kind === 'cork') { const len = between(400, 560); return { kind, len, yaw: zero, pitch: zero, roll: ease(side() * Math.PI * 2, len) }; }
+  // Loops are 400 to 500 m round (radius 64 to 80 m), so the chase camera sees round them.
+  if (kind === 'loop') { const len = between(400, 500); return { kind, len, yaw: ease(side() * between(0.3, 0.5), len), pitch: ease(Math.PI * 2, len), roll: zero }; }
   return { kind, len: between(50, 140), yaw: zero, pitch: zero, roll: zero };
 }
 
 function stepTrack() {
-  if (!gen.seg || gen.at >= gen.seg.len) { gen.seg = track.P.length < 220 ? { kind: 'straight', len: 220, yaw: zero, pitch: zero, roll: zero } : pickSegment(); gen.at = 0; }
+  if (!gen.seg || gen.at >= gen.seg.len) {
+    if (!gen.queue.length) gen.queue.push(...[].concat(track.P.length < 220 ? { kind: 'straight', len: 220, yaw: zero, pitch: zero, roll: zero } : pickSegment()));
+    gen.seg = gen.queue.shift(); gen.at = 0;
+  }
   const { seg } = gen, u = (gen.at + STEP / 2) / seg.len;
   let yaw = seg.yaw(u) * STEP, pitch = seg.pitch(u) * STEP, roll = seg.roll(u) * STEP;
   // Outside corkscrews and loops, ease the frame back upright and level, so turns and hills
   // never accumulate a lean.
   if (seg.kind !== 'cork' && seg.kind !== 'loop') {
     const right = tv.copy(AX.right).applyQuaternion(gen.q);
-    if (seg.kind !== 'turn' && seg.kind !== 'side') roll -= right.y * 0.03 * STEP;
-    if (seg.kind !== 'hill') pitch -= tv.copy(AX.fwd).applyQuaternion(gen.q).y * 0.015 * STEP;
+    if (!LEANING.has(seg.kind)) roll -= right.y * 0.03 * STEP;
+    // Hold the nose towards a slope that brings the altitude back to the band around ALTITUDE,
+    // through the local up: no effect on a side, reversed upside down.
+    const upY = tv.copy(AX.up).applyQuaternion(gen.q).y;
+    const want = THREE.MathUtils.clamp(-(gen.p.y - ALTITUDE) * 0.004, -0.12, 0.12);
+    if (seg.kind !== 'hill') pitch -= (tv.copy(AX.fwd).applyQuaternion(gen.q).y - want) * upY * 0.02 * STEP;
   }
-  gen.q.multiply(tq.setFromEuler(te.set(pitch, yaw, roll, 'YXZ'))).normalize();
+  // Yaw turns about the world vertical, so a corner banked onto its side still turns on the level;
+  // pitch and roll are about the track's own axes.
+  gen.q.premultiply(tq.setFromAxisAngle(AX.up, yaw)).multiply(tq.setFromEuler(te.set(pitch, 0, roll, 'YXZ'))).normalize();
   gen.p.addScaledVector(tv.copy(AX.fwd).applyQuaternion(gen.q), STEP);
   gen.minY = Math.min(gen.minY, gen.p.y);
   track.P.push(gen.p.clone()); track.Q.push(gen.q.clone()); track.kind.push(seg.kind); track.pitch.push(seg.pitch(u));
@@ -505,7 +529,7 @@ function reset() {
   rows = []; pads = []; streaks = [];
   seed = (Math.random() * 2 ** 31) | 0;
   track.P = []; track.Q = []; track.kind = []; track.pitch = [];
-  gen.p.set(0, 0, 0); gen.q.identity(); gen.seg = null; gen.at = 0; gen.minY = 0;
+  gen.p.set(0, 0, 0); gen.q.identity(); gen.seg = null; gen.at = 0; gen.minY = 0; gen.queue = [];
   track.P.push(gen.p.clone()); track.Q.push(gen.q.clone()); track.kind.push('straight'); track.pitch.push(0);
   timeScale = 1;
   speed = SPEED.start; boost = 0; distance = 0; s = START; x = 0; xv = 0; lane = 1;

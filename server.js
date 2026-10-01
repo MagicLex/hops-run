@@ -27,31 +27,32 @@ for (const [key, value] of Object.entries(cfg)) {
 }
 
 const LANES = ['left', 'centre', 'right'];
-const KINDS = { wall: 'a wall', low: 'a low block', bar: 'a bar overhead' };
-const MOVES = {
-  left: 'Move one lane to the left',
-  right: 'Move one lane to the right',
-  hold: 'Keep flying straight in the current lane',
-  up: 'Jump, to fly over a low block or a bar',
-  down: 'Duck, to fly under a bar',
-};
-const QUESTION = 'The hops flies forward through three lanes. A wall can only be avoided by changing lane, a low block by jumping over it, a bar by ducking under it or jumping over it. Which move gets the hops safely past the nearest row?';
+const HAS = { wall: 'a wall', low: 'a low block', bar: 'a bar', undefined: 'nothing, it is open' };
+const RULES = 'The hops crashes if it hits a wall: jumping or ducking never clears a wall, only moving to another lane does. Jumping clears a low block or a bar. Ducking clears a bar. Flying straight is only safe in an open lane.';
+const QUESTION = 'What should the hops do?';
 
-// The game sends structured state; the prompt is built here so the browser never shapes it.
+// The game sends structured state; the prompt is built here so the browser never shapes it. Jev
+// decides for the nearest row. The facts sit in the options (what each move leads into), so the
+// model judges the consequence of each move instead of cross-referencing the state; measured with
+// eval/decide.py, this is what takes the decision from a coin toss to reliable.
 function row({ lane, airborne, ahead }) {
   if (!LANES.includes(lane)) throw new Error('lane must be left, centre or right');
   if (!Array.isArray(ahead)) throw new Error('ahead must be a list of rows');
-  const rows = ahead.slice(0, 3).map(({ distance, lanes }) => {
-    const parts = LANES.map((l) => `${l} lane ${KINDS[lanes?.[l]] ?? 'open'}`);
-    return `In ${Math.round(distance)} m: ${parts.join(', ')}.`;
-  });
-  const i = LANES.indexOf(lane);
-  const moves = Object.keys(MOVES).filter((m) => !(m === 'left' && i === 0) && !(m === 'right' && i === 2) && !(m === 'up' && airborne));
+  const next = ahead[0];
+  const i = LANES.indexOf(lane), lanes = next?.lanes ?? {}, here = HAS[lanes[lane]];
+  const options = [];
+  for (const [id, j] of [['left', i - 1], ['right', i + 1]]) {
+    if (j >= 0 && j < 3) options.push({ id, description: `Move to the ${LANES[j]} lane, which has ${HAS[lanes[LANES[j]]]}` });
+  }
+  options.push({ id: 'hold', description: `Stay in the ${lane} lane, which has ${here}, and fly straight` });
+  if (!airborne) options.push({ id: 'up', description: `Stay in the ${lane} lane, which has ${here}, and jump` });
+  options.push({ id: 'down', description: `Stay in the ${lane} lane, which has ${here}, and duck` });
+  const where = next ? `The next row of obstacles is ${Math.round(next.distance)} m ahead.` : 'There are no obstacles ahead.';
   return {
     id: 'hops',
-    state: [`The hops is in the ${lane} lane${airborne ? ', in the air' : ''}.`, ...(rows.length ? rows : ['No obstacles ahead.'])].join(' '),
+    state: `${RULES} The hops is in the ${lane} lane${airborne ? ', in the air' : ''}. ${where}`,
     question: QUESTION,
-    options: moves.map((id) => ({ id, description: MOVES[id] })),
+    options,
   };
 }
 
