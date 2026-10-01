@@ -28,7 +28,7 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 | --- | --- |
 | `GET /` | The game, with the leaderboard rendered in the page |
 | `GET /api/board` | `{ runs, html }`: the top runs, and the same rows as rendered on the page |
-| `POST /api/runs` | `{ name, distance, durationMs }` adds a run, returns `{ id, rank, runs, html }`. With `Authorization: Bearer <pilot token>` and `{ pilot, model }` it adds a model pilot's run and returns `{ number, best, runs, html }` |
+| `POST /api/runs` | `{ name, distance, durationMs, runKey }` adds a run, returns `{ id, rank, runs, html }`. `runKey` is a UUID the page draws at the crash: a second post with the same key records nothing and returns the run already recorded, so the page retries safely through a restart. With `Authorization: Bearer <pilot token>` and `{ pilot, model }` it adds a model pilot's run and returns `{ number, best, runs, html }` |
 | `POST /api/seat` | `{}` joins, `{ id, active }` is the heartbeat. Returns `{ id, state, position, heartbeatMs }`, `state` one of `play`, `wait`, `gone` |
 | `POST /api/seat/leave` | `{ id }` frees the seat or the place in line |
 | `GET /health` | `{ status, version, players, waiting, maxPlayers }` when the database answers |
@@ -39,7 +39,7 @@ At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and t
 
 Analytics: Umami (`analytics.hops.io`, website `Hops Run`) records page views and the events `run-start`, `crash` (`distance`), `board-submit` (`distance`, `rank`) and `queue-wait` (`position`).
 
-Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so decision models race on the same board. Players are `player`. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot. The Jev pilot from earlier work is on the `jev-pilot` tag.
+Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so decision models race on the same board. Players are `player`. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, jevworks: Hopsworks). A model pilot missing from the top runs is listed below them with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
 
 ## jevworks pilot
 

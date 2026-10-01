@@ -55,6 +55,8 @@ await db.query(`
   ALTER TABLE runs ADD COLUMN IF NOT EXISTS game_version text;
   CREATE INDEX IF NOT EXISTS runs_distance ON runs (distance_m DESC, created_at);
   CREATE INDEX IF NOT EXISTS runs_pilot_distance ON runs (pilot, distance_m DESC, created_at);
+  ALTER TABLE runs ADD COLUMN IF NOT EXISTS run_key uuid;
+  CREATE UNIQUE INDEX IF NOT EXISTS runs_run_key ON runs (run_key);
 `);
 // Model pilots, as allowed by the table. A model pilot posts every run it flies, and each run
 // ranks on the board like a player's.
@@ -65,13 +67,36 @@ const PILOTS = ['jev', 'jevworks'];
 const MAX_SPEED = 160 + 45; // m/s
 const NAME = /^[\p{L}\p{N} ._-]{1,20}$/u;
 const SUBMIT = { perMinute: 6 };
+// A run carries the key its page drew at the crash: posting it again (a retry, a second click)
+// records nothing new and answers with the run already recorded.
+const RUN_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const findRun = async (runKey) => (await db.query(`SELECT id, distance_m, created_at FROM runs WHERE run_key = $1`, [runKey])).rows[0];
+async function recordRun({ name, pilot, model, distance, duration, client, runKey }) {
+  const { rows: [run] } = await db.query(
+    `INSERT INTO runs (name, pilot, model, distance_m, duration_ms, client, game_version, run_key) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (run_key) DO NOTHING RETURNING id, distance_m, created_at`,
+    [name, pilot, model, distance, duration, client, VERSION, runKey],
+  );
+  return run ?? findRun(runKey); // a concurrent post of the same key won the insert
+}
 
+// The top runs, ranked; then each model pilot missing from them, with its best run and that run's
+// place, so the models stay on the board when players outrun them.
 async function board() {
   const { rows } = await db.query(
     `SELECT name, pilot, model, distance_m, game_version, created_at FROM runs ORDER BY distance_m DESC, created_at ASC LIMIT $1`,
     [cfg.boardSize],
   );
-  return rows;
+  const top = rows.map((r, i) => ({ ...r, rank: i + 1 }));
+  const missing = PILOTS.filter((p) => !top.some((r) => r.pilot === p));
+  const { rows: below } = await db.query(
+    `SELECT b.*, 1 + (SELECT count(*) FROM runs o WHERE o.distance_m > b.distance_m OR (o.distance_m = b.distance_m AND o.created_at < b.created_at))::int AS rank
+     FROM unnest($1::text[]) AS p(pilot) CROSS JOIN LATERAL
+       (SELECT name, pilot, model, distance_m, game_version, created_at FROM runs WHERE runs.pilot = p.pilot ORDER BY distance_m DESC, created_at LIMIT 1) b
+     ORDER BY rank`,
+    [missing],
+  );
+  return [...top, ...below.map((r) => ({ ...r, below: true }))];
 }
 
 // Muted preview of the pilot's live stream; a click opens the stream on YouTube.
@@ -121,8 +146,15 @@ const clientOf = (req) => createHash('sha256').update(String(req.headers['x-forw
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 // Line robot in front of a model pilot's name. The slab in the scene draws the same path.
 const ROBOT = '<svg class="bot" viewBox="0 0 16 16" aria-label="model"><path d="M8 1.5V4M3 4h10v8.5H3zM6 7.25h.5M9.5 7.25h.5M6 10h4M1.5 7v3M14.5 7v3"/></svg>';
+// Who built each model pilot, credited on its rows.
+const MAKERS = { jev: { name: 'TypeSafe', url: 'https://typesafe.ai' }, jevworks: { name: 'Hopsworks', url: 'https://www.hopsworks.ai' } };
+const pilotTag = (r) => {
+  const maker = MAKERS[r.pilot];
+  return ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}${maker ? ` · by <a href="${maker.url}" target="_blank" rel="noopener">${maker.name}</a>` : ''}</i>`;
+};
+const boardRow = (r) => `<li data-rank="${r.rank}"${r.below ? ' class="below"' : ''}><span class="rank">${String(r.rank).padStart(2, '0')}</span><span class="who">${r.pilot === 'player' ? '' : ROBOT}${esc(r.name)}${r.pilot === 'player' ? '' : pilotTag(r)}</span><span class="dist">${r.distance_m} m <i class="ver">v${esc(r.game_version ?? '?')}</i></span></li>`;
 const boardRows = (rows) => rows.length
-  ? rows.map((r, i) => `<li><span class="rank">${String(i + 1).padStart(2, '0')}</span><span class="who">${r.pilot === 'player' ? '' : ROBOT}${esc(r.name)}${r.pilot === 'player' ? '' : ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}</i>`}</span><span class="dist">${r.distance_m} m <i class="ver">v${esc(r.game_version ?? '?')}</i></span></li>`).join('')
+  ? rows.map((r, i) => `${r.below && !rows[i - 1]?.below ? '<li class="gap" aria-hidden="true">···</li>' : ''}${boardRow(r)}`).join('')
   : '<li class="empty">No runs yet. Be the first.</li>';
 
 // Shared links (Open Graph, X): the page's title and description, and public/og.jpg, a 1200x630
@@ -218,6 +250,8 @@ body.flying .reticle { opacity: 0.5; }
 .board li:first-child { border-top: 0; }
 .board li.you { background: color-mix(in srgb, var(--green) 12%, transparent); }
 .board li.empty { display: block; color: var(--dim); text-align: center; }
+.board li.gap { display: block; color: var(--dim); text-align: center; padding: 0 12px; line-height: 1.2; }
+.board .pilot a { color: inherit; pointer-events: auto; }
 .board .rank { color: var(--dim); }
 .board .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board .bot { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; fill: none; stroke: var(--green); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -339,24 +373,21 @@ app.post('/api/runs', async (req, res, next) => {
     if (!NAME.test(name)) return res.status(400).json({ error: 'Name: 1 to 20 letters, digits, spaces, dots, dashes or underscores.' });
     if (!Number.isFinite(distance) || !Number.isFinite(duration) || distance < 0 || duration <= 0) return res.status(400).json({ error: 'Distance and duration must be positive numbers.' });
     if (distance > (duration / 1000) * MAX_SPEED) return res.status(400).json({ error: 'That run is faster than the hops can fly.' });
+    const runKey = req.body?.runKey == null ? null : String(req.body.runKey);
+    if (runKey !== null && !RUN_KEY.test(runKey)) return res.status(400).json({ error: 'Run key: a UUID.' });
     const client = clientOf(req);
     if (req.headers.authorization) {
       if (!isPilot(req)) return res.status(401).json({ error: 'Unknown pilot token.' });
       const pilot = String(req.body?.pilot ?? ''), model = String(req.body?.model ?? '').slice(0, 64) || null;
       if (!PILOTS.includes(pilot)) return res.status(400).json({ error: `Pilot: one of ${PILOTS.join(', ')}.` });
-      await db.query(
-        `INSERT INTO runs (name, pilot, model, distance_m, duration_ms, client, game_version) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [name, pilot, model, distance, duration, client, VERSION],
-      );
+      await recordRun({ name, pilot, model, distance, duration, client, runKey });
       const { rows: [{ number, best }] } = await db.query(`SELECT count(*)::int AS number, max(distance_m) AS best FROM runs WHERE pilot = $1`, [pilot]);
       const runs = await board();
       return res.json({ number, best, runs, html: boardRows(runs) });
     }
-    if (!allowed(client)) return res.status(429).json({ error: 'Too many runs from here in the last minute. Try again shortly.' });
-    const { rows: [run] } = await db.query(
-      `INSERT INTO runs (name, distance_m, duration_ms, client, game_version) VALUES ($1, $2, $3, $4, $5) RETURNING id, distance_m, created_at`,
-      [name, distance, duration, client, VERSION],
-    );
+    const known = runKey && await findRun(runKey);
+    if (!known && !allowed(client)) return res.status(429).json({ error: 'Too many runs from here in the last minute. Try again shortly.' });
+    const run = known || await recordRun({ name, pilot: 'player', model: null, distance, duration, client, runKey });
     const { rows: [{ rank }] } = await db.query(
       `SELECT count(*)::int + 1 AS rank FROM runs WHERE distance_m > $1 OR (distance_m = $1 AND created_at < $2)`,
       [run.distance_m, run.created_at],

@@ -508,11 +508,12 @@ function drawSlab() {
   g.textAlign = 'right'; g.fillText(document.querySelector('.hud .label b')?.textContent?.toUpperCase() ?? '', W - pad, pad + 30); g.textAlign = 'left';
   g.fillStyle = '#151513'; g.fillRect(pad, pad + 58, W - pad * 2, 4);
   const items = [...document.querySelectorAll('#board li')];
-  const rowH = (H - pad * 2 - 80) / 10;
+  const rowH = (H - pad * 2 - 80) / Math.max(10, items.length);
   g.letterSpacing = '0px';
   items.forEach((li, i) => {
     const y = pad + 84 + i * rowH;
     if (li.classList.contains('empty')) { g.font = '400 48px "Geist Mono"'; g.fillStyle = '#8A867D'; g.fillText(li.textContent, pad, y + rowH * 0.7); return; }
+    if (li.classList.contains('gap')) { g.font = '400 40px "Geist Mono"'; g.fillStyle = '#8A867D'; g.textAlign = 'center'; g.fillText(li.textContent, W / 2, y + rowH * 0.6); g.textAlign = 'left'; return; }
     if (li.classList.contains('you')) { g.fillStyle = 'rgba(14,143,101,0.14)'; g.fillRect(pad - 12, y + 4, W - pad * 2 + 24, rowH - 4); }
     const rank = li.querySelector('.rank')?.textContent ?? '', pilot = li.querySelector('.pilot')?.textContent ?? '';
     const who = li.querySelector('.who'), bot = who?.querySelector('.bot path')?.getAttribute('d');
@@ -633,7 +634,7 @@ function crash(row, hitMesh) {
   flash.style.transition = 'none'; flash.style.opacity = '0.35';
   requestAnimationFrame(() => { flash.style.transition = 'opacity 0.9s ease-out'; flash.style.opacity = '0'; });
   ui.status.textContent = `Crashed at ${Math.round(distance)} m`; ui.status.className = 'label crash';
-  lastRun = { distance: Math.round(distance), durationMs: Math.round(flightMs) };
+  lastRun = { distance: Math.round(distance), durationMs: Math.round(flightMs), runKey: crypto.randomUUID() };
   analytics('crash', { distance: lastRun.distance });
   if (PILOT) finished(lastRun);
   setTimeout(() => {
@@ -681,33 +682,51 @@ addEventListener('keydown', (e) => {
 });
 
 // --- leaderboard ---------------------------------------------------------------------------------
+// A run is posted with the key drawn at its crash, so it is safe to post again: while the game
+// server restarts (a deploy) or the network drops, the post is retried; the server records a key once.
+const RETRY = { attempts: 5, waitMs: 2000 };
+async function postRun(run) {
+  for (let attempt = 1; ; attempt++) {
+    let res = null;
+    try { res = await fetch('api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(run) }); } catch { /* network down */ }
+    if (res && ![502, 503, 504].includes(res.status)) {
+      // Anything in front of the game (a proxy, a login) may answer with something other than JSON.
+      const d = await res.json().catch(() => ({ error: `Leaderboard unreachable (HTTP ${res.status}). Your run is kept: try again.` }));
+      if (!res.ok || d.error) throw new Error(d.error);
+      return d;
+    }
+    if (attempt === RETRY.attempts) throw new Error('Leaderboard unreachable. Your run is kept: try again.');
+    result.textContent = `Board restarting, retrying (${attempt}/${RETRY.attempts - 1})`;
+    await new Promise((r) => setTimeout(r, RETRY.waitMs));
+  }
+}
 // The board is rendered by the server into the page; after a crash the form posts the run and
 // the server returns the board, ranked, as HTML.
 const form = document.getElementById('sign'), nameInput = document.getElementById('name');
 const boardEl = document.getElementById('board'), result = document.getElementById('result');
 try { nameInput.value = localStorage.getItem('hops-run-name') ?? ''; } catch { /* storage blocked */ }
-let lastRun = null, submitted = false;
+let lastRun = null, submitted = false, posting = false;
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!lastRun || submitted) return;
+  if (!lastRun || submitted || posting) return;
+  posting = true;
   const name = nameInput.value.trim();
   try { localStorage.setItem('hops-run-name', name); } catch { /* storage blocked */ }
   form.querySelector('button').disabled = true;
   try {
-    const res = await fetch('api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ...lastRun }) });
-    // Anything in front of the game (a proxy, a login) may answer with something other than JSON.
-    const d = await res.json().catch(() => ({ error: `Leaderboard unreachable (HTTP ${res.status}). Your run is kept: try again.` }));
-    if (!res.ok || d.error) throw new Error(d.error);
+    const d = await postRun({ name, ...lastRun });
     submitted = true;
     analytics('board-submit', { distance: lastRun.distance, rank: d.rank });
     boardEl.innerHTML = d.html;
-    boardEl.children[d.rank - 1]?.classList.add('you');
-    result.textContent = d.rank <= d.runs.length ? `${lastRun.distance} m · rank ${d.rank}` : `${lastRun.distance} m · rank ${d.rank}, outside the top ${d.runs.length}`;
+    boardEl.querySelector(`li[data-rank="${d.rank}"]`)?.classList.add('you');
+    const top = d.runs.filter((r) => !r.below).length;
+    result.textContent = d.rank <= top ? `${lastRun.distance} m · rank ${d.rank}` : `${lastRun.distance} m · rank ${d.rank}, outside the top ${top}`;
     form.hidden = true;
     nameInput.blur();
   } catch (err) {
     result.innerHTML = `<span class="err">${String(err.message).replace(/[<>&]/g, '')}</span>`;
   } finally {
+    posting = false;
     form.querySelector('button').disabled = false;
   }
 });
