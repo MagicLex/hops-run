@@ -480,6 +480,55 @@ function shatterBlock(m, fwd) {
 }
 const flash = document.querySelector('.flash');
 
+// --- the leaderboard in the world -----------------------------------------------------------------
+// A paper slab floating over the track. On the start and crash screens it hovers ahead of the hops;
+// once a run starts it stays put and the hops flies under it. Its face is drawn from the board the
+// server rendered into the page (#board): the HTML list stays the content, the slab is its view.
+const SLAB = { w: 16, h: 9, d: 0.6, ahead: 30, lift: 7 }; // bottom edge 2.5 m up: the hops (top 2.3 m) flies under // metres; lift is the centre above the track
+const slabCanvas = document.createElement('canvas');
+slabCanvas.width = 1600; slabCanvas.height = 900;
+const slabTex = new THREE.CanvasTexture(slabCanvas);
+slabTex.colorSpace = THREE.SRGBColorSpace; slabTex.anisotropy = 8;
+const slab = new THREE.Group(), slabFloat = new THREE.Group();
+slabFloat.add(block(SLAB.w, SLAB.h, SLAB.d));
+const slabFace = new THREE.Mesh(new THREE.PlaneGeometry(SLAB.w - 0.24, SLAB.h - 0.24), new THREE.MeshBasicMaterial({ map: slabTex }));
+slabFace.position.z = SLAB.d / 2 + 0.01; // +z faces the chase camera
+slabFloat.add(slabFace);
+slab.add(slabFloat);
+const slabShadow = new THREE.Mesh(new THREE.PlaneGeometry(SLAB.w * 0.9, SLAB.d * 3).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: PAPER.end, transparent: true, opacity: 0.7, depthWrite: false }));
+scene.add(slab, slabShadow);
+let slabS = 0;
+
+function drawSlab() {
+  const g = slabCanvas.getContext('2d'), W = slabCanvas.width, H = slabCanvas.height, pad = 64;
+  g.fillStyle = '#FCFBF8'; g.fillRect(0, 0, W, H);
+  g.textBaseline = 'alphabetic';
+  g.font = '500 38px "Geist Mono"'; g.letterSpacing = '6px'; g.fillStyle = '#8A867D';
+  g.fillText('LEADERBOARD', pad, pad + 30);
+  g.textAlign = 'right'; g.fillText(document.querySelector('.hud .label b')?.textContent?.toUpperCase() ?? '', W - pad, pad + 30); g.textAlign = 'left';
+  g.fillStyle = '#151513'; g.fillRect(pad, pad + 58, W - pad * 2, 4);
+  const items = [...document.querySelectorAll('#board li')];
+  const rowH = (H - pad * 2 - 80) / 10;
+  g.letterSpacing = '0px';
+  items.forEach((li, i) => {
+    const y = pad + 84 + i * rowH;
+    if (li.classList.contains('empty')) { g.font = '400 48px "Geist Mono"'; g.fillStyle = '#8A867D'; g.fillText(li.textContent, pad, y + rowH * 0.7); return; }
+    if (li.classList.contains('you')) { g.fillStyle = 'rgba(14,143,101,0.14)'; g.fillRect(pad - 12, y + 4, W - pad * 2 + 24, rowH - 4); }
+    const rank = li.querySelector('.rank')?.textContent ?? '', pilot = li.querySelector('.pilot')?.textContent ?? '';
+    const name = (li.querySelector('.who')?.firstChild?.textContent ?? '').trim(), dist = (li.querySelector('.dist')?.firstChild?.textContent ?? '').trim();
+    const base = y + rowH * 0.68;
+    g.font = '400 40px "Geist Mono"'; g.fillStyle = '#8A867D'; g.fillText(rank, pad, base);
+    g.font = '500 48px "Geist Mono"'; g.fillStyle = '#151513'; g.fillText(name, pad + 96, base);
+    if (pilot) { const w = g.measureText(name).width; g.font = '500 30px "Geist Mono"'; g.fillStyle = '#0E8F65'; g.fillText(pilot.toUpperCase(), pad + 96 + w + 20, base); }
+    g.font = '500 48px "Geist Mono"'; g.fillStyle = '#151513'; g.textAlign = 'right'; g.fillText(dist, W - pad, base); g.textAlign = 'left';
+    g.fillStyle = '#D9D5CC'; g.fillRect(pad, y + rowH, W - pad * 2, 2);
+  });
+  slabTex.needsUpdate = true;
+}
+document.fonts.load('500 48px "Geist Mono"').then(drawSlab, drawSlab);
+new MutationObserver(drawSlab).observe(document.getElementById('board'), { childList: true, subtree: true, attributes: true });
+document.body.classList.add('in-world'); // the 3D slab now carries the board; the HTML list stays for no-JS and crawlers
+
 // --- state ---------------------------------------------------------------------------------------
 const ui = Object.fromEntries(['distance', 'speed', 'status', 'prompt', 'charge'].map((id) => [id, document.getElementById(id)]));
 const grain = document.querySelector('.grain');
@@ -534,6 +583,7 @@ function reset() {
   speed = SPEED.start; boost = 0; distance = 0; s = START; x = 0; xv = 0; lane = 1;
   h = HOVER; hv = 0; airborne = false; hover = HOVER; duckT = 0; camX = 0; camH = 0; charge = 0;
   nextRowAt = START + 110; nextPadAt = START + 200; nextStreakAt = START;
+  slabS = s + SLAB.ahead;
 }
 
 function start() {
@@ -769,6 +819,15 @@ function frame(now) {
   }
   for (const r of rows.filter((r) => s - r.s > BEHIND)) for (const m of r.meshes) drop(m);
   rows = rows.filter((r) => s - r.s <= BEHIND);
+
+  // Leaderboard slab: hovers ahead between runs, stays put during one.
+  if (!flying) slabS = THREE.MathUtils.lerp(slabS, s + SLAB.ahead, Math.min(1, raw * 2));
+  place(slab, slabS, 0, SLAB.lift);
+  slabFloat.position.y = Math.sin(t * 1.1) * 0.25;
+  slabFloat.rotation.z = Math.sin(t * 0.7) * 0.025;
+  slabFloat.rotation.y = Math.sin(t * 0.5) * 0.04;
+  place(slabShadow, slabS, 0, 0.03);
+  slab.visible = slabShadow.visible = Math.abs(slabS - s) < AHEAD;
 
   // Camera: behind and above in the track's frame, its up easing towards the track's up so the
   // world turns over in a loop; lagging a little on lane changes, rolled with the bank, shaken

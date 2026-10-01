@@ -78,6 +78,7 @@ const page = (rows) => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hops Run</title>
 <meta name="description" content="Fly the hops through a procedural track of turns, loops and corkscrews. Dodge, jump and duck, then put your name on the leaderboard.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="fonts/GeistMono.ttf" as="font" type="font/ttf" crossorigin>
 <style>
 @font-face { font-family: Geist; src: url(fonts/Geist.ttf); font-weight: 100 900; }
@@ -105,9 +106,9 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .gauge i.full { background: var(--green); }
 #status.crash { color: var(--error); }
 #status.flying { color: var(--fg); }
-.center { position: fixed; inset: 0; display: grid; place-items: start center; pointer-events: none; padding: max(12vh, 88px) var(--m) var(--m); }
+.center { position: fixed; inset: 0; display: grid; place-items: start center; pointer-events: none; padding: max(4vh, 28px) var(--m) var(--m); }
 .prompt { text-align: center; display: grid; gap: 18px; justify-items: center; }
-.prompt h1 { font-size: clamp(40px, 8vw, 92px); font-weight: 600; letter-spacing: -0.055em; margin: 0; line-height: 0.95; }
+.prompt h1 { font-size: clamp(36px, 6vw, 72px); font-weight: 600; letter-spacing: -0.055em; margin: 0; line-height: 0.95; }
 .prompt[hidden] { display: none; }
 .keys { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; }
 .board { width: min(420px, 100%); margin: 6px 0 0; padding: 0; list-style: none; font-family: 'Geist Mono', monospace; font-size: 14px; text-align: left; background: color-mix(in srgb, var(--paper) 80%, transparent); border: 1px solid var(--rule); }
@@ -125,6 +126,7 @@ form.sign[hidden] { display: none; }
 form.sign input { font: 500 15px 'Geist Mono', monospace; padding: 9px 12px; width: 220px; border: 1px solid var(--fg); background: var(--paper); color: var(--fg); }
 form.sign button { font: 500 13px 'Geist Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; padding: 9px 14px; border: 1px solid var(--fg); background: var(--fg); color: var(--paper); cursor: pointer; }
 .err { color: var(--error); }
+.in-world .board, .in-world .board-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 640px) { .row.bottom { flex-direction: column-reverse; align-items: stretch; } .right { text-align: left; justify-items: start; } form.sign input { width: 160px; } }
 </style>
 <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.js" } }</script>
@@ -159,7 +161,7 @@ form.sign button { font: 500 13px 'Geist Mono', monospace; letter-spacing: 0.08e
       <button type="submit">Add to board</button>
     </form>
     <div class="keys label"><span><b>Space</b> Fly</span><span>Steer ← → · Jump ↑ · Duck ↓</span></div>
-    <div class="label">Leaderboard</div>
+    <div class="label board-label">Leaderboard</div>
     <ol class="board" id="board">${boardRows(rows)}</ol>
   </div>
 </div>
