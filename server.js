@@ -4,11 +4,14 @@
 // decision models race on one board.
 //
 // Settings (env):
-//   PORT           listen port
-//   DATABASE_URL   postgres://user:password@host:5432/db
-//   BOARD_SIZE     rows on the leaderboard (default 10)
+//   PORT              listen port
+//   DATABASE_URL      postgres://user:password@host:5432/db
+//   MAX_PLAYERS       players flying at once; beyond it, visitors wait in a live queue
+//   BOARD_SIZE        rows on the leaderboard (default 10)
+//   UMAMI_SRC         Umami tracker script URL (analytics off when unset)
+//   UMAMI_WEBSITE_ID  Umami website id (analytics off when unset)
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -22,8 +25,10 @@ const cfg = {
   port: Number(process.env.PORT),
   databaseUrl: process.env.DATABASE_URL,
   boardSize: Number(process.env.BOARD_SIZE ?? 10),
+  maxPlayers: Number(process.env.MAX_PLAYERS),
+  umami: process.env.UMAMI_SRC && process.env.UMAMI_WEBSITE_ID ? { src: process.env.UMAMI_SRC, id: process.env.UMAMI_WEBSITE_ID } : null,
 };
-if (!cfg.port || !cfg.databaseUrl) throw new Error('missing setting: PORT and DATABASE_URL are required');
+if (!cfg.port || !cfg.databaseUrl || !(cfg.maxPlayers > 0)) throw new Error('missing setting: PORT, DATABASE_URL and MAX_PLAYERS are required');
 
 // The pool lives for the process and is closed on shutdown.
 const db = new pg.Pool({ connectionString: cfg.databaseUrl, max: 5 });
@@ -64,11 +69,33 @@ function allowed(client) {
   recent.set(client, [...hits, now]);
   return true;
 }
-const clientOf = (req) => createHash('sha256').update(String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress).split(',')[0].trim()).digest('hex').slice(0, 16);
+// Seats: at most MAX_PLAYERS sessions play at once, the rest wait in arrival order. A page holds
+// its session with a heartbeat; a session silent for TTL is dropped. A seated player idle for IDLE
+// gives up the seat, only when someone is waiting. In memory: a restart empties seats and queue,
+// and pages rejoin on their next heartbeat.
+const SEAT = { heartbeatMs: 10_000, ttlMs: 30_000, idleMs: 120_000, perClient: 8 };
+const seated = new Map(), waiting = new Map(); // id -> { client, seen, active }, in arrival order
+function sweep(now) {
+  for (const queue of [seated, waiting]) for (const [id, s] of queue) if (now - s.seen > SEAT.ttlMs) queue.delete(id);
+  if (waiting.size) for (const [id, s] of seated) if (now - s.active > SEAT.idleMs) seated.delete(id);
+  for (const [id, s] of waiting) {
+    if (seated.size >= cfg.maxPlayers) break;
+    waiting.delete(id); seated.set(id, s);
+  }
+}
+function seat(id) {
+  if (seated.has(id)) return { id, state: 'play', heartbeatMs: SEAT.heartbeatMs };
+  const position = [...waiting.keys()].indexOf(id) + 1;
+  return position ? { id, state: 'wait', position, heartbeatMs: SEAT.heartbeatMs } : { state: 'gone' };
+}
+
+const clientOf = (req) =>createHash('sha256').update(String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress).split(',')[0].trim()).digest('hex').slice(0, 16);
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// Line robot in front of a model pilot's name. The slab in the scene draws the same path.
+const ROBOT = '<svg class="bot" viewBox="0 0 16 16" aria-label="model"><path d="M8 1.5V4M3 4h10v8.5H3zM6 7.25h.5M9.5 7.25h.5M6 10h4M1.5 7v3M14.5 7v3"/></svg>';
 const boardRows = (rows) => rows.length
-  ? rows.map((r, i) => `<li><span class="rank">${String(i + 1).padStart(2, '0')}</span><span class="who">${esc(r.name)}${r.pilot === 'player' ? '' : ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}</i>`}</span><span class="dist">${r.distance_m} m <i class="ver">v${esc(r.game_version ?? '?')}</i></span></li>`).join('')
+  ? rows.map((r, i) => `<li><span class="rank">${String(i + 1).padStart(2, '0')}</span><span class="who">${r.pilot === 'player' ? '' : ROBOT}${esc(r.name)}${r.pilot === 'player' ? '' : ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}</i>`}</span><span class="dist">${r.distance_m} m <i class="ver">v${esc(r.game_version ?? '?')}</i></span></li>`).join('')
   : '<li class="empty">No runs yet. Be the first.</li>';
 
 const page = (rows) => `<!doctype html>
@@ -118,7 +145,8 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .board li.empty { display: block; color: var(--dim); text-align: center; }
 .board .rank { color: var(--dim); }
 .board .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.board .pilot { color: var(--green); font-style: normal; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.board .bot { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; fill: none; stroke: var(--green); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.board .pilot {color: var(--green); font-style: normal; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
 .board .dist { text-align: right; }
 .board .ver { color: var(--dim); font-style: normal; font-size: 11px; margin-left: 6px; }
 form.sign { display: flex; gap: 8px; pointer-events: auto; }
@@ -130,6 +158,7 @@ form.sign button { font: 500 13px 'Geist Mono', monospace; letter-spacing: 0.08e
 @media (max-width: 640px) { .row.bottom { flex-direction: column-reverse; align-items: stretch; } .right { text-align: left; justify-items: start; } form.sign input { width: 160px; } }
 </style>
 <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.js" } }</script>
+${cfg.umami ? `<script defer src="${esc(cfg.umami.src)}" data-website-id="${esc(cfg.umami.id)}"></script>` : ''}
 </head>
 <body>
 <canvas id="scene"></canvas>
@@ -160,6 +189,7 @@ form.sign button { font: 500 13px 'Geist Mono', monospace; letter-spacing: 0.08e
       <input id="name" name="name" maxlength="20" placeholder="Your name" aria-label="Your name" required>
       <button type="submit">Add to board</button>
     </form>
+    <div class="label" id="seat" hidden></div>
     <div class="keys label"><span><b>Space</b> Fly</span><span>Steer ← → · Jump ↑ · Duck ↓</span></div>
     <div class="label board-label">Leaderboard</div>
     <ol class="board" id="board">${boardRows(rows)}</ol>
@@ -176,7 +206,31 @@ app.get('/', async (_req, res, next) => {
   try { res.type('html').send(page(await board())); } catch (e) { next(e); }
 });
 app.get('/health', async (_req, res) => {
-  try { await db.query('SELECT 1'); res.json({ status: 'ok', version: VERSION }); } catch { res.status(503).send('database unavailable'); }
+  try { await db.query('SELECT 1'); sweep(Date.now()); res.json({ status: 'ok', version: VERSION, players: seated.size, waiting: waiting.size, maxPlayers: cfg.maxPlayers }); } catch { res.status(503).send('database unavailable'); }
+});
+// Join with no id, or heartbeat with the id from the join: `active` when the player did something
+// since the last beat. Answers the seat: play, wait (with position), or gone (join again).
+app.post('/api/seat', (req, res) => {
+  const now = Date.now(), id = String(req.body?.id ?? ''), known = seated.get(id) ?? waiting.get(id);
+  if (known) {
+    known.seen = now;
+    if (req.body?.active) known.active = now;
+  } else if (!id) {
+    const client = clientOf(req);
+    if ([...seated.values(), ...waiting.values()].filter((s) => s.client === client).length >= SEAT.perClient) return res.status(429).json({ error: 'Too many open games from here. Close one and try again.' });
+    const fresh = randomUUID();
+    waiting.set(fresh, { client, seen: now, active: now });
+    sweep(now);
+    return res.json(seat(fresh));
+  }
+  sweep(now);
+  res.json(seat(id));
+});
+app.post('/api/seat/leave', (req, res) => {
+  const id = String(req.body?.id ?? '');
+  seated.delete(id); waiting.delete(id);
+  sweep(Date.now());
+  res.status(204).end();
 });
 app.get('/api/board', async (_req, res, next) => {
   try { const runs = await board(); res.json({ runs, html: boardRows(runs) }); } catch (e) { next(e); }

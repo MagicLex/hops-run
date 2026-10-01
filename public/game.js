@@ -515,11 +515,19 @@ function drawSlab() {
     if (li.classList.contains('empty')) { g.font = '400 48px "Geist Mono"'; g.fillStyle = '#8A867D'; g.fillText(li.textContent, pad, y + rowH * 0.7); return; }
     if (li.classList.contains('you')) { g.fillStyle = 'rgba(14,143,101,0.14)'; g.fillRect(pad - 12, y + 4, W - pad * 2 + 24, rowH - 4); }
     const rank = li.querySelector('.rank')?.textContent ?? '', pilot = li.querySelector('.pilot')?.textContent ?? '';
-    const name = (li.querySelector('.who')?.firstChild?.textContent ?? '').trim(), dist = (li.querySelector('.dist')?.firstChild?.textContent ?? '').trim();
+    const who = li.querySelector('.who'), bot = who?.querySelector('.bot path')?.getAttribute('d');
+    const name = ([...(who?.childNodes ?? [])].find((n) => n.nodeType === Node.TEXT_NODE)?.textContent ?? '').trim(), dist = (li.querySelector('.dist')?.firstChild?.textContent ?? '').trim();
     const base = y + rowH * 0.68;
+    let nx = pad + 96;
     g.font = '400 40px "Geist Mono"'; g.fillStyle = '#8A867D'; g.fillText(rank, pad, base);
-    g.font = '500 48px "Geist Mono"'; g.fillStyle = '#151513'; g.fillText(name, pad + 96, base);
-    if (pilot) { const w = g.measureText(name).width; g.font = '500 30px "Geist Mono"'; g.fillStyle = '#0E8F65'; g.fillText(pilot.toUpperCase(), pad + 96 + w + 20, base); }
+    if (bot) {
+      // The board's robot (16 px viewBox) at 40 px, sitting on the baseline.
+      g.save(); g.translate(nx, base - 36); g.scale(2.5, 2.5);
+      g.strokeStyle = '#0E8F65'; g.lineWidth = 1.5; g.lineCap = g.lineJoin = 'round'; g.stroke(new Path2D(bot));
+      g.restore(); nx += 56;
+    }
+    g.font = '500 48px "Geist Mono"'; g.fillStyle = '#151513'; g.fillText(name, nx, base);
+    if (pilot) { const w = g.measureText(name).width; g.font = '500 30px "Geist Mono"'; g.fillStyle = '#0E8F65'; g.fillText(pilot.toUpperCase(), nx + w + 20, base); }
     g.font = '500 48px "Geist Mono"'; g.fillStyle = '#151513'; g.textAlign = 'right'; g.fillText(dist, W - pad, base); g.textAlign = 'left';
     g.fillStyle = '#D9D5CC'; g.fillRect(pad, y + rowH, W - pad * 2, 2);
   });
@@ -586,7 +594,12 @@ function reset() {
   slabS = s + SLAB.ahead;
 }
 
+// Umami custom events, when the page loads the tracker.
+const analytics = (event, data) => window.umami?.track(event, data);
+
 function start() {
+  if (seat.state !== 'play') return;
+  analytics('run-start');
   reset();
   mode = 'flying';
   flightMs = 0; lastRun = null; submitted = false;
@@ -607,6 +620,7 @@ function crash(row, hitMesh) {
   requestAnimationFrame(() => { flash.style.transition = 'opacity 0.9s ease-out'; flash.style.opacity = '0'; });
   ui.status.textContent = `Crashed at ${Math.round(distance)} m`; ui.status.className = 'label crash';
   lastRun = { distance: Math.round(distance), durationMs: Math.round(flightMs) };
+  analytics('crash', { distance: lastRun.distance });
   setTimeout(() => {
     if (mode !== 'crashed') return;
     ui.prompt.querySelector('h1').textContent = `${lastRun.distance} m`;
@@ -633,9 +647,10 @@ function steer(move) {
 }
 
 addEventListener('keydown', (e) => {
+  seat.active = true;
   if (document.activeElement === nameInput) return; // typing a name
   if (mode !== 'flying') {
-    if (e.code === 'Space') { e.preventDefault(); start(); }
+    if (e.code === 'Space') { e.preventDefault(); if (seat.state === 'gone') joinSeat(); else start(); }
     return;
   }
   if (e.code === 'ArrowLeft' || e.code === 'KeyA') steer('left');
@@ -663,6 +678,7 @@ form.addEventListener('submit', async (e) => {
     const d = await res.json().catch(() => ({ error: `Leaderboard unreachable (HTTP ${res.status}). Your run is kept: try again.` }));
     if (!res.ok || d.error) throw new Error(d.error);
     submitted = true;
+    analytics('board-submit', { distance: lastRun.distance, rank: d.rank });
     boardEl.innerHTML = d.html;
     boardEl.children[d.rank - 1]?.classList.add('you');
     result.textContent = d.rank <= d.runs.length ? `${lastRun.distance} m · rank ${d.rank}` : `${lastRun.distance} m · rank ${d.rank}, outside the top ${d.runs.length}`;
@@ -674,6 +690,47 @@ form.addEventListener('submit', async (e) => {
     form.querySelector('button').disabled = false;
   }
 });
+
+// --- seat ----------------------------------------------------------------------------------------
+// The server seats a limited number of players at once; beyond it the page waits in line and
+// shows its place. A heartbeat holds the seat. A seat lost while playing (a server restart) is
+// joined again at once; one released while idle (others were waiting) waits for Space.
+const seatEl = document.getElementById('seat');
+const seat = { id: null, state: null, position: 0, active: false, every: 10_000, timer: 0, waited: false };
+function showSeat(error) {
+  seatEl.hidden = !error && (seat.state === 'play' || seat.state === null);
+  if (error) seatEl.innerHTML = `<span class="err">${String(error).replace(/[<>&]/g, '')}</span>`;
+  else if (seat.state === 'wait') seatEl.textContent = `The track is full. You are number ${seat.position} in line`;
+  else if (seat.state === 'gone') seatEl.textContent = 'Seat released while you were away. Press Space to get back in line';
+}
+async function beat() {
+  clearTimeout(seat.timer);
+  const active = seat.active || mode === 'flying';
+  seat.active = false;
+  try {
+    const res = await fetch('api/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: seat.id, active }) });
+    const d = await res.json().catch(() => ({ error: `Game server unreachable (HTTP ${res.status}). Retrying.` }));
+    if (!res.ok || d.error) throw new Error(d.error);
+    if (d.state === 'gone') {
+      seat.id = null; seat.state = 'gone';
+      if (active) return joinSeat();
+      return showSeat();
+    }
+    Object.assign(seat, { id: d.id, state: d.state, position: d.position ?? 0, every: d.heartbeatMs });
+    if (d.state === 'wait' && !seat.waited) { seat.waited = true; analytics('queue-wait', { position: d.position }); }
+    showSeat();
+  } catch (err) {
+    showSeat(err.message);
+  }
+  seat.timer = setTimeout(beat, seat.every);
+}
+function joinSeat() { seat.id = null; seat.state = null; beat(); }
+addEventListener('pagehide', () => {
+  if (seat.id) navigator.sendBeacon('api/seat/leave', new Blob([JSON.stringify({ id: seat.id })], { type: 'application/json' }));
+  clearTimeout(seat.timer);
+});
+addEventListener('pageshow', (e) => { if (e.persisted) joinSeat(); }); // back from the page cache
+joinSeat();
 
 // --- loop ----------------------------------------------------------------------------------------
 const clock = new THREE.Timer();

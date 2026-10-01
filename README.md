@@ -8,14 +8,16 @@ Live at [game.hopsworks.ai](https://game.hopsworks.ai). `hopsworks.ai/run` redir
 
 ```sh
 npm install
-PORT=8811 DATABASE_URL=postgres://hops_run:...@localhost:5432/hops_run npm start
+PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/hops_run npm start
 ```
 
 | Setting | Meaning |
 | --- | --- |
 | `PORT` | Listen port |
 | `DATABASE_URL` | Postgres connection string. The `runs` table is created at start if missing |
+| `MAX_PLAYERS` | Players flying at once. Beyond it, visitors wait in a live queue |
 | `BOARD_SIZE` | Rows on the leaderboard, default 10 |
+| `UMAMI_SRC`, `UMAMI_WEBSITE_ID` | Umami tracker script and website id. Analytics is off when either is unset |
 
 ## API
 
@@ -24,9 +26,15 @@ PORT=8811 DATABASE_URL=postgres://hops_run:...@localhost:5432/hops_run npm start
 | `GET /` | The game, with the leaderboard rendered in the page |
 | `GET /api/board` | `{ runs, html }`: the top runs, and the same rows as rendered on the page |
 | `POST /api/runs` | `{ name, distance, durationMs }` adds a run, returns `{ id, rank, runs, html }` |
-| `GET /health` | `{ status, version }` when the database answers |
+| `POST /api/seat` | `{}` joins, `{ id, active }` is the heartbeat. Returns `{ id, state, position, heartbeatMs }`, `state` one of `play`, `wait`, `gone` |
+| `POST /api/seat/leave` | `{ id }` frees the seat or the place in line |
+| `GET /health` | `{ status, version, players, waiting, maxPlayers }` when the database answers |
 
 A run is refused when its name is not 1 to 20 letters, digits, spaces, dots, dashes or underscores, or when its distance is more than top speed plus a full boost over its duration. Each client address may add 6 runs a minute.
+
+At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and the start screen shows their place in line. A page holds its seat with a heartbeat every 10 s and loses it after 30 s of silence. A seated player idle for 2 minutes gives up the seat when someone is waiting. Seats and queue live in the server process: a restart empties them and pages join again on their next heartbeat. Each client address may hold 8 seats or places in line.
+
+Analytics: Umami (`analytics.hops.io`, website `Hops Run`) records page views and the events `run-start`, `crash` (`distance`), `board-submit` (`distance`, `rank`) and `queue-wait` (`position`).
 
 Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so decision models can race on the same board. Players are `player`; the Jev pilot from earlier work is on the `jev-pilot` tag.
 
