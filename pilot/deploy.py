@@ -9,7 +9,10 @@ mode), given the GPU and shared memory Chromium renders with, and its scheduling
 
 Reads HOPSWORKS_HOST, HOPSWORKS_API_KEY and HOPSWORKS_PROJECT (hopsworks.login defaults):
 
-    python pilot/deploy.py [--deployment semif4b] [--gpu | --no-gpu]
+    python pilot/deploy.py [--deployment semif4b] [--gpu | --no-gpu] [--stream-secret NAME | --no-stream]
+
+With a stream secret (default jevworks_youtube_key) the App also streams the page live to
+--stream-url, encoded on the GPU; streaming needs --gpu.
 """
 
 import argparse
@@ -24,10 +27,11 @@ from hopsworks_common import client
 HERE = pathlib.Path(__file__).resolve().parent
 SOURCES = ["runner.js", "start.sh", "package.json", "package-lock.json"]
 GATEWAY = "http://istio-ingressgateway.hopsworks.svc.cluster.local"
-# Measured in a pod: a GPU renders the game at 1080p and 60 fps; SwiftShader on 4 cores manages
-# 640x360 at about 30 fps, the floor below which the game slows down.
+# Measured in a pod: a GPU renders the game at 1080p and 60 fps, and Chromium, the runner and the
+# stream's ffmpeg then use about 2 cores; SwiftShader on 4 cores manages 640x360 at about 30 fps,
+# the floor below which the game slows down.
 RESOURCES = {
-    True: {"cores": 2.0, "memory": 4096, "gpus": 1, "viewport": "1920x1080"},
+    True: {"cores": 4.0, "memory": 4096, "gpus": 1, "viewport": "1920x1080"},
     False: {"cores": 4.0, "memory": 4096, "gpus": 0, "viewport": "640x360"},
 }
 
@@ -47,13 +51,20 @@ def main():
     parser.add_argument("--game-url", default="https://game.hopsworks.ai/", help="the game the pilot flies")
     parser.add_argument("--token-secret", default="jevworks_pilot_token", help="Hopsworks secret holding the pilot token")
     parser.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=True, help="render on a GPU")
+    parser.add_argument("--stream-secret", default="jevworks_youtube_key", help="Hopsworks secret holding the stream key")
+    parser.add_argument("--stream-url", default="rtmps://a.rtmp.youtube.com/live2", help="RTMP(S) ingest URL")
+    parser.add_argument("--no-stream", action="store_true", help="do not stream the page")
     args = parser.parse_args()
+    stream = not args.no_stream
+    if stream and not args.gpu:
+        raise SystemExit("streaming encodes on the GPU: use --gpu or --no-stream")
     res = RESOURCES[args.gpu]
 
     project = hopsworks.login()
     if project.get_model_serving().get_deployment(args.deployment) is None:
         raise SystemExit(f"no deployment {args.deployment} in {project.name}")
-    hopsworks.get_secrets_api().get_secret(args.token_secret)  # fails here, not in the pod, when missing
+    for secret in [args.token_secret] + ([args.stream_secret] if stream else []):
+        hopsworks.get_secrets_api().get_secret(secret)  # fails here, not in the pod, when missing
     apps, ds = project.get_app_api(), project.get_dataset_api()
 
     existing = apps.get_app(args.name)
@@ -74,6 +85,8 @@ def main():
         "tokenSecret": args.token_secret,
         "viewport": res["viewport"],
         "gpu": args.gpu,
+        "streamSecret": args.stream_secret if stream else None,
+        "streamUrl": args.stream_url if stream else None,
     }
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "config.json"

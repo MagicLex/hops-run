@@ -19,8 +19,17 @@ apt-get "${apt[@]}" update -qq
 for deb in debs/*.deb; do dpkg-deb -x "$deb" libs; done
 export LD_LIBRARY_PATH="$dir/libs/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-# The token the game accepts pilot runs with lives in a Hopsworks secret of the App's owner.
-secret=$(python -c 'import json; print(json.load(open("config.json"))["tokenSecret"])')
-PILOT_TOKEN=$(python -c 'import sys, hopsworks; hopsworks.login(); print(hopsworks.get_secrets_api().get_secret(sys.argv[1]).value)' "$secret" | tail -n 1)
+# The pilot token and the stream key live in Hopsworks secrets of the App's owner.
+setting() { python -c 'import json, sys; print(json.load(open("config.json")).get(sys.argv[1]) or "")' "$1"; }
+secret() { python -c 'import sys, hopsworks; hopsworks.login(); print(hopsworks.get_secrets_api().get_secret(sys.argv[1]).value)' "$1" | tail -n 1; }
+PILOT_TOKEN=$(secret "$(setting tokenSecret)")
 export PILOT_TOKEN
+stream_secret=$(setting streamSecret)
+if [ -n "$stream_secret" ]; then
+  # Static ffmpeg with NVENC, on the 8.1 release branch (BtbN keeps this name, dated builds expire).
+  curl -fsSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz | tar xJ
+  export FFMPEG="$dir/ffmpeg-n8.1-latest-linux64-gpl-8.1/bin/ffmpeg"
+  STREAM_KEY=$(secret "$stream_secret")
+  export STREAM_KEY
+fi
 exec node runner.js

@@ -2,7 +2,7 @@
 // Each move comes from the semif deployment of this Hopsworks project, read from what the page
 // shows (the lane, the rows ahead); each finished run is posted to the game's board as the
 // jevworks pilot. When the game ships a new version the page is reloaded, so the pilot always
-// flies what players fly.
+// flies what players fly. With a stream key, the page is also streamed live (e.g. to YouTube).
 //
 // Settings: config.json next to this file (written by deploy.py), overridden by env:
 //   GAME_URL      the game, e.g. https://game.hopsworks.ai/
@@ -10,12 +10,16 @@
 //   VIEWPORT      page size, e.g. 1920x1080
 //   GPU           "true": render on the pod's GPU (Vulkan); otherwise SwiftShader on the CPU
 //   PILOT_TOKEN   bearer token the game accepts pilot runs with (start.sh reads it from a secret)
+//   STREAM_URL    RTMP(S) ingest URL, e.g. rtmps://a.rtmp.youtube.com/live2
+//   STREAM_KEY    stream key (start.sh reads it from a secret); no stream when unset
+//   FFMPEG        ffmpeg binary with NVENC (start.sh downloads one)
 //   APP_PORT      health port, set by Hopsworks
 //   HOPSWORKS_API_KEY  API key with the SERVING scope, for runs outside Hopsworks; inside an App
 //                      the pod's own JWT (SECRETS_DIR/token.jwt) authenticates to semif
 
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
 
 const file = new URL('config.json', import.meta.url);
@@ -26,12 +30,16 @@ const cfg = {
   viewport: process.env.VIEWPORT ?? stored.viewport,
   gpu: String(process.env.GPU ?? stored.gpu) === 'true',
   token: process.env.PILOT_TOKEN,
+  streamUrl: process.env.STREAM_URL ?? stored.streamUrl,
+  streamKey: process.env.STREAM_KEY,
+  ffmpeg: process.env.FFMPEG,
   port: Number(process.env.APP_PORT ?? process.env.PORT),
   apiKey: process.env.HOPSWORKS_API_KEY,
   jwt: process.env.SECRETS_DIR && `${process.env.SECRETS_DIR}/token.jwt`,
 };
 const missing = ['gameUrl', 'semifUrl', 'viewport', 'token', 'port'].filter((k) => !cfg[k]);
 if (!cfg.apiKey && !cfg.jwt) missing.push('HOPSWORKS_API_KEY or SECRETS_DIR');
+if (cfg.streamKey && (!cfg.streamUrl || !cfg.ffmpeg)) missing.push('STREAM_URL and FFMPEG, for STREAM_KEY');
 if (missing.length) throw new Error(`missing setting: ${missing.join(', ')}`);
 const [width, height] = cfg.viewport.split('x').map(Number);
 // The platform rotates the pod's JWT: read it per call.
@@ -57,7 +65,7 @@ function row({ lane, airborne, ahead }) {
   return { id: 'hops', state: `${RULES} The hops is in the ${lane} lane${airborne ? ', in the air' : ''}. ${where}`, question: 'What should the hops do?', options };
 }
 
-const stats = { runs: 0, best: 0, last: null, model: null, version: null, renderer: null, lastDecision: Date.now() };
+const stats = { runs: 0, best: 0, last: null, model: null, version: null, renderer: null, stream: cfg.streamKey ? 'starting' : 'off', streamRestarts: 0, lastDecision: Date.now() };
 
 async function decide(state) {
   const res = await fetch(cfg.semifUrl, {
@@ -97,6 +105,45 @@ async function finished(run) {
   return d;
 }
 
+// --- stream --------------------------------------------------------------------------------------
+// The page as video: Chromium's screencast (JPEG frames as they are painted) into ffmpeg, encoded
+// on the GPU (NVENC) at a constant 30 fps with a silent audio track (YouTube expects one), pushed
+// to STREAM_URL. A dead ffmpeg is restarted while the page lives; frames are dropped while it
+// lags rather than buffered. ffmpeg's messages are logged with the key redacted.
+const STREAM = { fps: 30, bitrate: '6M', backlogBytes: 8 << 20 };
+function stream(page) {
+  let ff = null, cdp = null, stopped = false;
+  const redact = (text) => String(text).replaceAll(cfg.streamKey, '***');
+  const start = () => {
+    if (stopped) return;
+    ff = spawn(cfg.ffmpeg, ['-hide_banner', '-loglevel', 'warning',
+      '-f', 'image2pipe', '-c:v', 'mjpeg', '-use_wallclock_as_timestamps', '1', '-i', 'pipe:0',
+      '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100', '-map', '0:v', '-map', '1:a',
+      '-vf', `fps=${STREAM.fps},scale=in_range=pc:out_range=tv,format=yuv420p`, '-c:v', 'h264_nvenc', '-preset', 'p4', '-b:v', STREAM.bitrate,
+      '-maxrate', STREAM.bitrate, '-bufsize', `${parseInt(STREAM.bitrate, 10) * 2}M`, '-g', String(STREAM.fps * 2),
+      '-c:a', 'aac', '-b:a', '128k', '-f', 'flv', `${cfg.streamUrl}/${cfg.streamKey}`], { stdio: ['pipe', 'ignore', 'pipe'] });
+    ff.stdin.on('error', () => {}); // a dying ffmpeg closes its input; the exit handler restarts it
+    ff.stderr.on('data', (d) => console.error(`ffmpeg: ${redact(d).trim()}`));
+    ff.on('spawn', () => { stats.stream = 'live'; });
+    ff.on('exit', (code) => {
+      if (stopped) return;
+      stats.stream = 'restarting'; stats.streamRestarts++;
+      console.error(`stream: ffmpeg exited with ${code}, restarting`);
+      setTimeout(start, 5000);
+    });
+  };
+  start();
+  (async () => {
+    cdp = await page.context().newCDPSession(page);
+    cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
+      if (ff?.stdin.writable && ff.stdin.writableLength < STREAM.backlogBytes) ff.stdin.write(Buffer.from(data, 'base64'));
+      cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
+    });
+    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: width, maxHeight: height });
+  })().catch((e) => console.error(`stream: ${e.message}`));
+  return () => { stopped = true; stats.stream = 'off'; cdp?.detach().catch(() => {}); ff?.kill('SIGTERM'); };
+}
+
 // --- browser -------------------------------------------------------------------------------------
 let current = null; // the page being flown, for /frame.jpg
 async function fly() {
@@ -104,6 +151,7 @@ async function fly() {
     ? ['--use-angle=vulkan', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--enable-gpu']
     : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
   const browser = await chromium.launch({ args });
+  let stopStream = null;
   try {
     const page = current = await browser.newPage({ viewport: { width, height } });
     page.on('pageerror', (e) => console.error(`page error: ${e.message}`));
@@ -120,6 +168,7 @@ async function fly() {
         return gl ? gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) : 'no WebGL';
       });
       console.log(`flying ${cfg.gameUrl} v${stats.version}, ${cfg.viewport} on ${stats.renderer}`);
+      if (cfg.streamKey) { stopStream?.(); stopStream = stream(page); }
       reloadPending = false;
       while (!reloadPending) {
         const outcome = await Promise.race([closed.then(() => 'closed'), new Promise((r) => setTimeout(r, 5000, 'tick'))]);
@@ -130,6 +179,7 @@ async function fly() {
       await page.waitForTimeout(3000);
     }
   } finally {
+    stopStream?.();
     await browser.close().catch(() => {});
   }
 }

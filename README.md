@@ -49,7 +49,9 @@ The page enters pilot mode only when the runner exposes `jevworksDecide` and `je
 HOPSWORKS_HOST=10.117.191.130 HOPSWORKS_PROJECT=jevworks HOPSWORKS_API_KEY=... python pilot/deploy.py   # --no-gpu: SwiftShader, 640x360
 ```
 
-`GET /health` on the App returns the pilot's runs, best, last distance, model, game version and WebGL renderer, and 503 when no decision came in 5 minutes. `GET /frame.jpg` returns what the page shows right now.
+With the Hopsworks secret `jevworks_youtube_key` (a YouTube stream key), the App also streams the page live: Chromium's screencast into ffmpeg, NVENC h264 1080p30 at 6 Mbit/s with a silent audio track, over RTMPS to YouTube. `--no-stream` deploys without it.
+
+`GET /health` on the App returns the pilot's runs, best, last distance, model, game version, WebGL renderer and stream state, and 503 when no decision came in 5 minutes. `GET /frame.jpg` returns what the page shows right now.
 
 ## Deploy
 
