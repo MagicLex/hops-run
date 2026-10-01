@@ -37,7 +37,7 @@ At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and t
 
 Analytics: Umami (`analytics.hops.io`, website `Hops Run`) records page views and the events `run-start`, `crash` (`distance`), `board-submit` (`distance`, `rank`) and `queue-wait` (`position`).
 
-Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so decision models race on the same board. Players are `player`. A model pilot posts every run it flies, numbered; the board shows every player run and only the best run of each model pilot, marked with a robot. The Jev pilot from earlier work is on the `jev-pilot` tag.
+Every run carries a `pilot` (`player`, `jev`, `jevworks`) and a `model`, so decision models race on the same board. Players are `player`. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot. The Jev pilot from earlier work is on the `jev-pilot` tag.
 
 ## jevworks pilot
 

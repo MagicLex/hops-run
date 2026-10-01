@@ -50,8 +50,8 @@ await db.query(`
   CREATE INDEX IF NOT EXISTS runs_distance ON runs (distance_m DESC, created_at);
   CREATE INDEX IF NOT EXISTS runs_pilot_distance ON runs (pilot, distance_m DESC, created_at);
 `);
-// Model pilots, as allowed by the table. A model pilot posts every run it flies; the board keeps
-// only its best one, so it shows up there by beating players, never by volume.
+// Model pilots, as allowed by the table. A model pilot posts every run it flies, and each run
+// ranks on the board like a player's.
 const PILOTS = ['jev', 'jevworks'];
 
 // Game limits, mirrored from public/game.js: no run covers more than top speed plus a full boost
@@ -62,13 +62,8 @@ const SUBMIT = { perMinute: 6 };
 
 async function board() {
   const { rows } = await db.query(
-    `SELECT * FROM (
-       (SELECT name, pilot, model, distance_m, game_version, created_at FROM runs WHERE pilot = 'player' ORDER BY distance_m DESC, created_at LIMIT $1)
-       UNION ALL
-       SELECT b.* FROM unnest($2::text[]) AS p(pilot) CROSS JOIN LATERAL
-         (SELECT name, pilot, model, distance_m, game_version, created_at FROM runs WHERE runs.pilot = p.pilot ORDER BY distance_m DESC, created_at LIMIT 1) b
-     ) top ORDER BY distance_m DESC, created_at LIMIT $1`,
-    [cfg.boardSize, PILOTS],
+    `SELECT name, pilot, model, distance_m, game_version, created_at FROM runs ORDER BY distance_m DESC, created_at ASC LIMIT $1`,
+    [cfg.boardSize],
   );
   return rows;
 }
@@ -293,12 +288,9 @@ app.post('/api/runs', async (req, res, next) => {
       `INSERT INTO runs (name, distance_m, duration_ms, client, game_version) VALUES ($1, $2, $3, $4, $5) RETURNING id, distance_m, created_at`,
       [name, distance, duration, client, VERSION],
     );
-    // Rank as the board ranks: every player run, and each model pilot's best run.
     const { rows: [{ rank }] } = await db.query(
-      `SELECT 1 + (SELECT count(*) FROM runs WHERE pilot = 'player' AND (distance_m > $1 OR (distance_m = $1 AND created_at < $2)))::int
-                + (SELECT count(*) FROM unnest($3::text[]) AS p(pilot) WHERE EXISTS
-                    (SELECT 1 FROM runs WHERE runs.pilot = p.pilot AND (distance_m > $1 OR (distance_m = $1 AND created_at < $2))))::int AS rank`,
-      [run.distance_m, run.created_at, PILOTS],
+      `SELECT count(*)::int + 1 AS rank FROM runs WHERE distance_m > $1 OR (distance_m = $1 AND created_at < $2)`,
+      [run.distance_m, run.created_at],
     );
     const runs = await board();
     res.json({ id: run.id, rank, runs, html: boardRows(runs) });
