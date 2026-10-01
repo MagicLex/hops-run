@@ -1,0 +1,3 @@
+# NVIDIA structured-data-models (KumoTabular), pinned to the commit the predictor was written against.
+structured-data-models @ git+https://github.com/NVIDIA/structured-data-models.git@5d663369ff8ead4a78c910dbb8483d558e46627b
+pandas

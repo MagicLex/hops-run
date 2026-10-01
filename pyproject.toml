@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jevworks"
 version = "0.1.0"
-description = "SemIf semantic-if decisions served as a Hopsworks model deployment"
+description = "Decision models (SemIf, Kumo Tabular, Clef-Flash) served as Hopsworks model deployments"
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.10"
