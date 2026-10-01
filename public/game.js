@@ -595,7 +595,7 @@ function reset() {
   slabS = s + SLAB.ahead;
 }
 
-// A model pilot flies the page when the jevworks runner drives it: the runner exposes
+// A model pilot flies the page when the pilot runner (pilot/runner.js) drives it: the runner exposes
 // jevworksDecide (state in, move probabilities out) and jevworksFinished (posts the run).
 const PILOT = typeof window.jevworksDecide === 'function';
 // Umami custom events, when the page loads the tracker; a model pilot's runs are not visits.
@@ -813,6 +813,7 @@ async function ask() {
       el.querySelector('i').style.width = i < 0 ? '0' : `${(d.probabilities[i] * 100).toFixed(1)}%`;
       el.querySelector('.p').textContent = i < 0 ? '-' : d.probabilities[i].toFixed(2);
     }
+    if (d.pilot !== pilot.name) pilot.record = ''; // the pilots take turns: a record is its own pilot's
     pilot.name = d.pilot; pilot.model = d.model;
     showPilot(`${d.forwardMs.toFixed(0)} ms`);
     if (mode === 'flying') {

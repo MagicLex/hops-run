@@ -1,12 +1,13 @@
-// Model pilot: flies the live Hops Run page in a headless Chromium, run after run, forever. Each
-// move comes from a decision model reading what the page shows (the lane, the rows ahead): the
-// semif deployment of this Hopsworks project (pilot jevworks) or TypeSafe's Jev API (pilot jev).
-// Each finished run is posted to the game's board under that pilot. When the game ships a new version the page is reloaded, so the pilot always
-// flies what players fly. With a stream key, the page is also streamed live (e.g. to YouTube).
+// Model pilots: fly the live Hops Run page in a headless Chromium, run after run, forever. Each
+// move comes from a decision model reading what the page shows (the lane, the rows ahead). The
+// deciders take turns, one run each, and each finished run is posted to the game's board under
+// its pilot. When the game ships a new version the page is reloaded, so the pilots always fly what
+// players fly. With a stream key, the page is also streamed live (e.g. to YouTube).
 //
 // Settings: config.json next to this file (written by deploy.py), overridden by env:
 //   GAME_URL      the game, e.g. https://game.hopsworks.ai/
-//   DECIDER       semif (pilot jevworks, the default), jev (pilot jev), kumo (pilot kumo) or clef (pilot clef)
+//   DECIDER       the rotation, comma-separated: semif (pilot jevworks, the default), jev (pilot jev),
+//                 kumo (pilot kumo), clef (pilot clef); e.g. semif,kumo,jev
 //   SEMIF_URL     path-routed predict URL of the semif deployment, for semif
 //   KUMO_URL      path-routed predict URL of the Kumo Tabular deployment (pilot/kumo), for kumo
 //   CLEF_URL      path-routed predict URL of the Clef-Flash deployment (pilot/clef), for clef
@@ -55,10 +56,10 @@ const DECIDERS = {
   kumo: { pilot: 'kumo', needs: ['kumoUrl'] },
   clef: { pilot: 'clef', needs: ['clefUrl'] },
 };
-if (!DECIDERS[cfg.decider]) throw new Error(`DECIDER: one of ${Object.keys(DECIDERS).join(', ')}`);
-const PILOT = DECIDERS[cfg.decider].pilot;
-const missing = ['gameUrl', 'viewport', 'token', 'port', ...DECIDERS[cfg.decider].needs].filter((k) => !cfg[k]);
-if (['semif', 'kumo', 'clef'].includes(cfg.decider) && !cfg.apiKey && !cfg.jwt) missing.push('HOPSWORKS_API_KEY or SECRETS_DIR');
+const ROTATION = cfg.decider.split(',').map((d) => d.trim());
+if (ROTATION.some((d) => !DECIDERS[d])) throw new Error(`DECIDER: comma-separated, of ${Object.keys(DECIDERS).join(', ')}`);
+const missing = [...new Set(['gameUrl', 'viewport', 'token', 'port', ...ROTATION.flatMap((d) => DECIDERS[d].needs)])].filter((k) => !cfg[k]);
+if (ROTATION.some((d) => ['semif', 'kumo', 'clef'].includes(d)) && !cfg.apiKey && !cfg.jwt) missing.push('HOPSWORKS_API_KEY or SECRETS_DIR');
 if (cfg.streamKey && (!cfg.streamUrl || !cfg.ffmpeg)) missing.push('STREAM_URL and FFMPEG, for STREAM_KEY');
 if (missing.length) throw new Error(`missing setting: ${missing.join(', ')}`);
 const [width, height] = cfg.viewport.split('x').map(Number);
@@ -85,11 +86,15 @@ function row({ lane, airborne, ahead }) {
   return { id: 'hops', state: `${RULES} The hops is in the ${lane} lane${airborne ? ', in the air' : ''}. ${where}`, question: 'What should the hops do?', options };
 }
 
-const stats = { runs: 0, best: 0, last: null, model: null, version: null, renderer: null, stream: cfg.streamKey ? 'starting' : 'off', streamRestarts: 0, lastDecision: Date.now() };
+// The decider flying the current run; the next run is the next decider's.
+let turn = 0;
+const flying = () => ROTATION[turn % ROTATION.length];
+// Per pilot: runs, best and last distance as the board counts them, and the model it flies with.
+const stats = { pilots: {}, version: null, renderer: null, stream: cfg.streamKey ? 'starting' : 'off', streamRestarts: 0, lastDecision: Date.now() };
 
 // A Hopsworks deployment answers with option ids, probabilities and its forward time: semif reads
 // the decision as text (row), Kumo Tabular as the game state itself.
-async function decideServed(url, input) {
+async function decideServed(name, url, input) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: auth(), 'Content-Type': 'application/json' },
@@ -97,11 +102,9 @@ async function decideServed(url, input) {
     signal: AbortSignal.timeout(5000),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(`${cfg.decider}: HTTP ${res.status} ${text.slice(0, 200)}`);
+  if (!res.ok) throw new Error(`${name}: HTTP ${res.status} ${text.slice(0, 200)}`);
   const [p] = JSON.parse(text).predictions;
-  stats.lastDecision = Date.now();
-  stats.model = String(p.model.revision ?? '').replace(/^hopsworks:/, '');
-  return { pilot: PILOT, moves: p.option_ids, probabilities: p.probabilities, forwardMs: p.forward_seconds * 1000, model: stats.model };
+  return { moves: p.option_ids, probabilities: p.probabilities, forwardMs: p.forward_seconds * 1000, model: String(p.model.revision ?? '').replace(/^hopsworks:/, '') };
 }
 
 // Jev and Clef answer the same decision as one SystemOne Choice question: the options are the
@@ -122,9 +125,7 @@ async function decideJev(state) {
   const body = await res.text();
   if (!res.ok) throw new Error(`jev: HTTP ${res.status} ${body.slice(0, 200)}`);
   const d = JSON.parse(body);
-  stats.lastDecision = Date.now();
-  stats.model = d.model;
-  return { pilot: PILOT, moves, probabilities: moves.map((m) => d.answers.move.probabilities[m] ?? 0), forwardMs: performance.now() - t0, model: d.model };
+  return { moves, probabilities: moves.map((m) => d.answers.move.probabilities[m] ?? 0), forwardMs: performance.now() - t0, model: d.model };
 }
 async function decideClef(state) {
   const { moves, body: request } = choiceRequest(state, 'clef-flash');
@@ -137,35 +138,42 @@ async function decideClef(state) {
   const body = await res.text();
   if (!res.ok) throw new Error(`clef: HTTP ${res.status} ${body.slice(0, 200)}`);
   const [d] = JSON.parse(body).predictions;
-  stats.lastDecision = Date.now();
-  stats.model = String(d.model ?? '').replace(/^hopsworks:/, '');
-  return { pilot: PILOT, moves, probabilities: moves.map((m) => d.answers.move.probabilities[m] ?? 0), forwardMs: d.forward_seconds * 1000, model: stats.model };
+  return { moves, probabilities: moves.map((m) => d.answers.move.probabilities[m] ?? 0), forwardMs: d.forward_seconds * 1000, model: String(d.model ?? '').replace(/^hopsworks:/, '') };
 }
-const decide = {
-  semif: (state) => decideServed(cfg.semifUrl, row(state)),
-  kumo: (state) => decideServed(cfg.kumoUrl, state),
+const DECIDE = {
+  semif: (state) => decideServed('semif', cfg.semifUrl, row(state)),
+  kumo: (state) => decideServed('kumo', cfg.kumoUrl, state),
   jev: decideJev,
   clef: decideClef,
-}[cfg.decider];
+};
+const pilotStats = (pilot) => (stats.pilots[pilot] ??= { runs: 0, best: 0, last: null, model: null });
+async function decide(state) {
+  const decider = flying(), d = await DECIDE[decider](state), pilot = DECIDERS[decider].pilot;
+  stats.lastDecision = Date.now();
+  pilotStats(pilot).model = d.model;
+  return { pilot, ...d };
+}
 
 // --- runs ----------------------------------------------------------------------------------------
 const gameVersion = async () => (await (await fetch(new URL('health', cfg.gameUrl), { signal: AbortSignal.timeout(5000) })).json()).version;
 let reloadPending = false;
 
 async function finished(run) {
+  const pilot = DECIDERS[flying()].pilot, mine = pilotStats(pilot);
+  turn++; // posted or not, the next run is the next decider's
   const res = await fetch(new URL('api/runs', cfg.gameUrl), {
     method: 'POST',
     headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: PILOT, pilot: PILOT, model: stats.model, ...run }),
+    body: JSON.stringify({ name: pilot, pilot, model: mine.model, ...run }),
     signal: AbortSignal.timeout(10_000),
   });
   const d = await res.json().catch(() => ({ error: `game: HTTP ${res.status}` }));
   if (!res.ok || d.error) {
-    console.error(`run not posted: ${d.error}`);
+    console.error(`${pilot} run not posted: ${d.error}`);
     return { error: d.error ?? `game: HTTP ${res.status}` };
   }
-  Object.assign(stats, { runs: d.number, best: d.best, last: run.distance });
-  console.log(`run ${d.number}: ${run.distance} m in ${(run.durationMs / 1000).toFixed(1)} s, best ${d.best} m`);
+  Object.assign(mine, { runs: d.number, best: d.best, last: run.distance });
+  console.log(`${pilot} run ${d.number}: ${run.distance} m in ${(run.durationMs / 1000).toFixed(1)} s, best ${d.best} m`);
   // A new game version reaches the pilot between runs.
   reloadPending = (await gameVersion().catch(() => stats.version)) !== stats.version;
   return d;
@@ -273,8 +281,8 @@ createServer(async (req, res) => {
   }
   const ok = req.url === '/health' && Date.now() - stats.lastDecision < WATCHDOG_MS;
   res.writeHead(ok || req.url !== '/health' ? 200 : 503, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: ok ? 'ok' : 'stalled', ...stats, lastDecision: new Date(stats.lastDecision).toISOString() }));
-}).listen(cfg.port, '0.0.0.0', () => console.log(`${PILOT} pilot (${cfg.decider}) health on :${cfg.port}`));
+  res.end(JSON.stringify({ status: ok ? 'ok' : 'stalled', flying: DECIDERS[flying()].pilot, ...stats, lastDecision: new Date(stats.lastDecision).toISOString() }));
+}).listen(cfg.port, '0.0.0.0', () => console.log(`pilots ${ROTATION.join(', ')} health on :${cfg.port}`));
 
 // A stop (SIGTERM, SIGINT) ends the pilot: Playwright closes the browser on these signals, and the
 // loop below would otherwise take that for a lost browser and relaunch it.

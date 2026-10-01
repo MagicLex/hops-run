@@ -1,7 +1,7 @@
 // Hops Run: Express server for the game. Serves the page with the leaderboard rendered in the
 // initial HTML, the three.js scene, and the leaderboard API backed by Postgres. Every run on the
-// board carries its pilot (a player, Jev, or jevworks) and the model behind it, so players and
-// decision models race on one board.
+// board carries its pilot (a player, or a model pilot: jev, jevworks, kumo, clef) and the model
+// behind it, so players and decision models race on one board.
 //
 // Settings (env):
 //   PORT              listen port
@@ -14,7 +14,7 @@
 //                       (model pilot runs refused when unset)
 //   PUBLIC_URL        public origin, e.g. https://game.hopsworks.ai/: canonical link and share card
 //                     (no share card when unset)
-//   LIVE_YOUTUBE_CHANNEL  YouTube channel id streaming the jevworks pilot: the start screen shows
+//   LIVE_YOUTUBE_CHANNEL  YouTube channel id streaming the model pilots: the start screen shows
 //                         its live preview (none when unset)
 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -98,15 +98,15 @@ async function recordRun({ name, pilot, model, distance, duration, client, runKe
   return run ?? findRun(runKey); // a concurrent post of the same key won the insert
 }
 
-// The top runs, ranked; then each model pilot missing from them, with its best run and that run's
-// place, so the models stay on the board when players outrun them.
+// The top runs, ranked; then the best player and each model pilot missing from them, with its best
+// run and that run's place, so players and every model stay on the board whoever leads it.
 async function board() {
   const { rows } = await db.query(
     `SELECT name, pilot, model, distance_m, game_version, created_at FROM runs ORDER BY distance_m DESC, created_at ASC LIMIT $1`,
     [cfg.boardSize],
   );
   const top = rows.map((r, i) => ({ ...r, rank: i + 1 }));
-  const missing = PILOTS.filter((p) => !top.some((r) => r.pilot === p));
+  const missing = ['player', ...PILOTS].filter((p) => !top.some((r) => r.pilot === p));
   const { rows: below } = await db.query(
     `SELECT b.*, 1 + (SELECT count(*) FROM runs o WHERE o.distance_m > b.distance_m OR (o.distance_m = b.distance_m AND o.created_at < b.created_at))::int AS rank
      FROM unnest($1::text[]) AS p(pilot) CROSS JOIN LATERAL
@@ -119,8 +119,8 @@ async function board() {
 
 // Muted preview of the pilot's live stream; a click opens the stream on YouTube.
 const liveCard = (channel) => `<a class="live" id="live" href="https://www.youtube.com/channel/${esc(channel)}/live" target="_blank" rel="noopener">
-  <span class="label head"><span>Feed · <b>jevworks</b></span><span class="on"><i class="dot"></i>Live</span></span>
-  <span class="screen brackets"><iframe data-src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" title="jevworks live on YouTube" allow="autoplay; encrypted-media" tabindex="-1"></iframe></span>
+  <span class="label head"><span>Feed · <b>AI pilots</b></span><span class="on"><i class="dot"></i>Live</span></span>
+  <span class="screen brackets"><iframe data-src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" title="AI pilots live on YouTube" allow="autoplay; encrypted-media" tabindex="-1"></iframe></span>
 </a>`;
 
 // A model pilot proves itself with the bearer token whose sha256 is PILOT_TOKEN_SHA256.
@@ -185,7 +185,7 @@ const boardRows = (rows) => rows.length
 
 // Shared links (Open Graph, X): the page's title and description, and public/og.jpg, a 1200x630
 // capture of the game.
-const DESCRIPTION = 'Fly the hops through turns, loops and corkscrews, and beat jevworks, the AI pilot flying live on the same leaderboard.';
+const DESCRIPTION = 'Fly the hops through turns, loops and corkscrews, and beat the AI pilots flying live on the same leaderboard.';
 const shareCard = (url) => `<link rel="canonical" href="${esc(url)}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Hopsworks">

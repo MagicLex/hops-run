@@ -1,15 +1,17 @@
-"""Deploy the jevworks pilot as a Hopsworks App, flying the live game with a semif deployment.
+"""Deploy the model pilots as a Hopsworks App, flying the live game in turns, one run each.
 
 Idempotent: the app is stopped, deleted and recreated from the local sources. Settings travel as
 a generated config.json next to runner.js. The pilot token is read at start from the Hopsworks
 secret --token-secret of the deploying user; the game holds its sha256 (PILOT_TOKEN_SHA256).
+Each Hopsworks decider is a deployment given as [PROJECT/]NAME (default project: this one); jev
+reads its TypeSafe key from the secret --typesafe-secret.
 After creation the job config is switched to root proxy routing (the SDK leaves the legacy prefix
 mode), given the GPU and shared memory Chromium renders with, and its schedulingConfig dropped
 (the PUT refuses it for apps).
 
 Reads HOPSWORKS_HOST, HOPSWORKS_API_KEY and HOPSWORKS_PROJECT (hopsworks.login defaults):
 
-    python pilot/deploy.py [--deployment semif4b] [--gpu | --no-gpu] [--stream-secret NAME | --no-stream]
+    python pilot/deploy.py [--deciders semif,kumo] [--gpu | --no-gpu] [--stream-secret NAME | --no-stream]
 
 With a stream secret (default jevworks_youtube_key) the App also streams the page live to
 --stream-url, encoded on the GPU; streaming needs --gpu.
@@ -23,6 +25,9 @@ import time
 
 import hopsworks
 from hopsworks_common import client
+from hopsworks_common.client.exceptions import RestAPIError
+from hopsworks_common.core.project_api import ProjectApi
+from hsml.deployment import Deployment
 
 HERE = pathlib.Path(__file__).resolve().parent
 SOURCES = ["runner.js", "start.sh", "package.json", "package-lock.json"]
@@ -44,9 +49,26 @@ def wait(what, done, timeout_s=600, every_s=5):
     raise TimeoutError(f"{what} after {timeout_s}s")
 
 
+def predict_url(project, spec):
+    """In-cluster predict URL of the deployment [PROJECT/]NAME; fails here when it does not exist."""
+    owner, _, name = spec.rpartition("/")
+    pid = ProjectApi()._get_project(owner).id if owner else project.id
+    try:
+        found = Deployment.from_response_json(client._get_instance()._send_request("GET", ["project", pid, "serving"], query_params={"name": name}))
+    except RestAPIError as e:
+        raise SystemExit(f"no deployment {spec}: {e}") from e
+    return f"{GATEWAY}/v1/{found.project_namespace}/{name}/v1/models/{name}:predict"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--deployment", default="semif4b", help="semif deployment the pilot decides with")
+    parser.add_argument("--deciders", default="semif,kumo", help="the rotation, comma-separated: semif, kumo, clef, jev")
+    parser.add_argument("--semif", default="semif4b", help="semif deployment, [PROJECT/]NAME")
+    parser.add_argument("--kumo", default="kumo", help="Kumo Tabular deployment, [PROJECT/]NAME")
+    parser.add_argument("--clef", default="Kumo_Tabular/clef", help="Clef-Flash deployment, [PROJECT/]NAME")
+    parser.add_argument("--jev-url", default="https://api.typesafe.ai/v1/systemone", help="TypeSafe System One endpoint")
+    parser.add_argument("--jev-model", default="jev-latest", help="TypeSafe model")
+    parser.add_argument("--typesafe-secret", default="typesafe_api_key", help="Hopsworks secret holding the TypeSafe API key")
     parser.add_argument("--name", default="jevworks_pilot", help="App name (letters, digits, underscore)")
     parser.add_argument("--game-url", default="https://game.hopsworks.ai/", help="the game the pilot flies")
     parser.add_argument("--token-secret", default="jevworks_pilot_token", help="Hopsworks secret holding the pilot token")
@@ -60,10 +82,14 @@ def main():
         raise SystemExit("streaming encodes on the GPU: use --gpu or --no-stream")
     res = RESOURCES[args.gpu]
 
+    deciders = args.deciders.split(",")
+    if not set(deciders) <= {"semif", "kumo", "clef", "jev"}:
+        raise SystemExit(f"--deciders: comma-separated, of semif, kumo, clef, jev (got {args.deciders})")
+
     project = hopsworks.login()
-    if project.get_model_serving().get_deployment(args.deployment) is None:
-        raise SystemExit(f"no deployment {args.deployment} in {project.name}")
-    for secret in [args.token_secret] + ([args.stream_secret] if stream else []):
+    urls = {f"{d}Url": predict_url(project, getattr(args, d)) for d in deciders if d != "jev"}
+    jev = "jev" in deciders
+    for secret in [args.token_secret] + ([args.stream_secret] if stream else []) + ([args.typesafe_secret] if jev else []):
         hopsworks.get_secrets_api().get_secret(secret)  # fails here, not in the pod, when missing
     apps, ds = project.get_app_api(), project.get_dataset_api()
 
@@ -81,7 +107,11 @@ def main():
         ds.upload(str(HERE / name), target, overwrite=True)
     config = {
         "gameUrl": args.game_url,
-        "semifUrl": f"{GATEWAY}/v1/{project.name}/{args.deployment}/v1/models/{args.deployment}:predict",
+        "decider": args.deciders,
+        **urls,
+        "jevUrl": args.jev_url if jev else None,
+        "jevModel": args.jev_model if jev else None,
+        "typesafeSecret": args.typesafe_secret if jev else None,
         "tokenSecret": args.token_secret,
         "viewport": res["viewport"],
         "gpu": args.gpu,
@@ -101,7 +131,7 @@ def main():
         app_port=8080,
         memory=res["memory"],
         cores=res["cores"],
-        description=f"jevworks pilot: flies {args.game_url} for ever with {args.deployment}.",
+        description=f"Model pilots {args.deciders}: fly {args.game_url} for ever, one run each in turn.",
         readiness_probe_path="/health",
     )
     jobs = ["project", project.id, "jobs", args.name]

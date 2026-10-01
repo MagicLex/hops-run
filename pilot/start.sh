@@ -1,5 +1,5 @@
 #!/bin/bash
-# Hopsworks App entrypoint for the jevworks pilot. The app directory is on HopsFS (FUSE): install
+# Hopsworks App entrypoint for the model pilots. The app directory is on HopsFS (FUSE): install
 # and run from local disk. The App image lacks a few libraries Chromium needs, and the loaders it
 # opens to reach the GPU driver (Vulkan, EGL); the pod has no root, so their Ubuntu packages are
 # downloaded with a user-owned apt state and unpacked locally.
@@ -19,11 +19,16 @@ apt-get "${apt[@]}" update -qq
 for deb in debs/*.deb; do dpkg-deb -x "$deb" libs; done
 export LD_LIBRARY_PATH="$dir/libs/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-# The pilot token and the stream key live in Hopsworks secrets of the App's owner.
+# The pilot token, the stream key and the TypeSafe key live in Hopsworks secrets of the App's owner.
 setting() { python -c 'import json, sys; print(json.load(open("config.json")).get(sys.argv[1]) or "")' "$1"; }
 secret() { python -c 'import sys, hopsworks; hopsworks.login(); print(hopsworks.get_secrets_api().get_secret(sys.argv[1]).value)' "$1" | tail -n 1; }
 PILOT_TOKEN=$(secret "$(setting tokenSecret)")
 export PILOT_TOKEN
+typesafe_secret=$(setting typesafeSecret)
+if [ -n "$typesafe_secret" ]; then
+  TYPESAFE_API_KEY=$(secret "$typesafe_secret")
+  export TYPESAFE_API_KEY
+fi
 stream_secret=$(setting streamSecret)
 if [ -n "$stream_secret" ]; then
   # Static ffmpeg with NVENC, on the 8.1 release branch (BtbN keeps this name, dated builds expire).
