@@ -9,8 +9,8 @@
 //   DECIDER       the rotation, comma-separated: semif (pilot jevworks, the default), jev (pilot jev),
 //                 kumo (pilot kumo), clef (pilot clef); e.g. semif,kumo,jev
 //   SEMIF_URL     path-routed predict URL of the semif deployment, for semif
-//   KUMO_URL      path-routed predict URL of the Kumo Tabular deployment (pilot/kumo), for kumo
-//   CLEF_URL      path-routed predict URL of the Clef-Flash deployment (pilot/clef), for clef
+//   KUMO_URL      path-routed predict URL of the Kumo Tabular deployment (MagicLex/jevworks kumo/), for kumo
+//   CLEF_URL      path-routed predict URL of the Clef-Flash deployment (MagicLex/jevworks clef/), for clef
 //   JEV_URL       TypeSafe System One endpoint, e.g. https://api.typesafe.ai/v1/systemone, for jev
 //   JEV_MODEL     TypeSafe model, e.g. jev-latest, for jev
 //   TYPESAFE_API_KEY  TypeSafe API key, for jev
@@ -19,6 +19,8 @@
 //   PILOT_TOKEN   bearer token the game accepts pilot runs with (start.sh reads it from a secret)
 //   STREAM_URL    RTMP(S) ingest URL, e.g. rtmps://a.rtmp.youtube.com/live2
 //   STREAM_KEY    stream key (start.sh reads it from a secret); no stream when unset
+//   STREAM_CHANNEL  YouTube channel id the key streams to: while it shows no live video, the
+//                 ingest is reconnected (see createStream)
 //   FFMPEG        ffmpeg binary with NVENC (start.sh downloads one)
 //   APP_PORT      health port, set by Hopsworks
 //   HOPSWORKS_API_KEY  API key with the SERVING scope, for runs outside Hopsworks; inside an App
@@ -45,6 +47,7 @@ const cfg = {
   token: process.env.PILOT_TOKEN,
   streamUrl: process.env.STREAM_URL ?? stored.streamUrl,
   streamKey: process.env.STREAM_KEY,
+  streamChannel: process.env.STREAM_CHANNEL ?? stored.streamChannel,
   ffmpeg: process.env.FFMPEG,
   port: Number(process.env.APP_PORT ?? process.env.PORT),
   apiKey: process.env.HOPSWORKS_API_KEY,
@@ -108,7 +111,7 @@ async function decideServed(name, url, input) {
 }
 
 // Jev and Clef answer the same decision as one SystemOne Choice question: the options are the
-// criteria. Jev is TypeSafe's API; Clef is a Hopsworks deployment (pilot/clef) answering the same
+// criteria. Jev is TypeSafe's API; Clef is a Hopsworks deployment (MagicLex/jevworks clef/) answering the same
 // request body, with its forward time. Jev reports none, so its round trip stands in.
 function choiceRequest(state, model) {
   const { state: text, question, options } = row(state);
@@ -186,7 +189,16 @@ async function finished(run) {
 // moves to each new page (a reload, a relaunched browser), and between pages the last frame is
 // sent again. A dead ffmpeg is restarted; frames are dropped while it lags rather than buffered.
 // ffmpeg's messages are logged with the key redacted.
-const STREAM = { fps: 30, bitrate: '6M', backlogBytes: 8 << 20, holdMs: 100 };
+// YouTube binds an ingest to the broadcast open when it connects: one that connects while YouTube
+// is still closing the previous broadcast (after a long drop) stays bound to it and never goes
+// live. With STREAM_CHANNEL, the channel's public live page is checked every minute; off air for
+// offAirChecks checks in a row while ffmpeg runs, the ingest is reconnected, at most every
+// reconnectMs.
+const STREAM = { fps: 30, bitrate: '6M', backlogBytes: 8 << 20, holdMs: 100, checkMs: 60_000, offAirChecks: 3, reconnectMs: 10 * 60_000 };
+const onAir = async () => {
+  const res = await fetch(`https://www.youtube.com/channel/${cfg.streamChannel}/live`, { headers: { 'Accept-Language': 'en', Cookie: 'CONSENT=YES+1' }, signal: AbortSignal.timeout(15_000) });
+  return /<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=/.test(await res.text());
+};
 function createStream() {
   let ff = null, cdp = null, last = null, lastAt = 0, stopped = false;
   const redact = (text) => String(text).replaceAll(cfg.streamKey, '***');
@@ -211,6 +223,18 @@ function createStream() {
   };
   start();
   const hold = setInterval(() => { if (last && Date.now() - lastAt > STREAM.holdMs) write(last); }, STREAM.holdMs);
+  let offAir = 0, reconnectedAt = 0;
+  const watch = cfg.streamChannel && setInterval(async () => {
+    const live = await onAir().catch(() => null); // unreachable: no verdict
+    if (live === null) return;
+    stats.youtube = live ? 'live' : 'off air';
+    offAir = live ? 0 : offAir + 1;
+    if (offAir >= STREAM.offAirChecks && ff?.exitCode === null && Date.now() - reconnectedAt > STREAM.reconnectMs) {
+      console.error(`stream: channel off air for ${offAir} checks, reconnecting the ingest`);
+      offAir = 0; reconnectedAt = Date.now();
+      ff.kill('SIGKILL'); // the exit handler starts a new ffmpeg
+    }
+  }, STREAM.checkMs);
   return {
     // Feed the stream from this page from now on.
     async attach(page) {
@@ -227,7 +251,7 @@ function createStream() {
     // block there on the network, holding the ingest).
     stop() {
       stopped = true; stats.stream = 'off';
-      clearInterval(hold);
+      clearInterval(hold); clearInterval(watch);
       if (ff && ff.exitCode === null) ff.kill('SIGKILL');
     },
   };

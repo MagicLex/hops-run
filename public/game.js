@@ -80,6 +80,8 @@ const fx = Math.random;
 // total angle and ends straight; `wave` swings out to a peak angle and back to zero.
 const ease = (total, len) => (u) => (total / len) * (1 - Math.cos(2 * Math.PI * u));
 const wave = (peak, len) => (u) => ((peak * Math.PI) / len) * Math.sin(2 * Math.PI * u);
+// A loop eased once round (ease(2 * PI)) comes out this share of its length ahead of where it went in.
+const LOOP_RUN = Array.from({ length: 1000 }, (_, i) => Math.cos(2 * Math.PI * ((i + 0.5) / 1000) - Math.sin(2 * Math.PI * ((i + 0.5) / 1000)))).reduce((a, c) => a + c) / 1000;
 const zero = () => 0;
 const track = { P: [], Q: [], kind: [], pitch: [] };
 const gen = { p: new THREE.Vector3(), q: new THREE.Quaternion(), seg: null, at: 0, minY: 0, queue: [] };
@@ -124,9 +126,20 @@ function pickSegment() {
       { kind: 'roll', len: turn, yaw: zero, pitch: zero, roll: ease(-angle, turn) },
     ];
   }
-  if (kind === 'cork') { const len = between(400, 560); return { kind, len, yaw: zero, pitch: zero, roll: ease(side() * Math.PI * 2, len) }; }
-  // Loops are 400 to 500 m round (radius 64 to 80 m), so the chase camera sees round them.
-  if (kind === 'loop') { const len = between(400, 500); return { kind, len, yaw: ease(side() * between(0.3, 0.5), len), pitch: ease(Math.PI * 2, len), roll: zero }; }
+  // Corkscrews and loops are helices: the frame turns once round an axis fixed at their start
+  // (axis, from the frame's forward and right) and comes out parallel to where it went in. The
+  // corkscrew winds round a line 8 to 20 m above the track, the track's up always towards it, so
+  // the hops is pressed on all the way round; it veers a little to the side it rolls to.
+  if (kind === 'cork') {
+    const len = between(400, 560), a = Math.asin((2 * Math.PI * between(8, 20)) / len), dir = side();
+    return { kind, len, yaw: zero, pitch: zero, roll: zero, turn: ease(Math.PI * 2, len), axis: (f, r) => f.multiplyScalar(dir * Math.cos(a)).addScaledVector(r, Math.sin(a)) };
+  }
+  // Loops are 400 to 500 m round (radius 64 to 80 m), so the chase camera sees round them, and
+  // come out 18 to 27 m (two to three track widths) to the side, clear of their own way in.
+  if (kind === 'loop') {
+    const len = between(400, 500), b = Math.asin(between(TRACK_W * 2, TRACK_W * 3) / (len * (1 - LOOP_RUN))) * side();
+    return { kind, len, yaw: zero, pitch: zero, roll: zero, turn: ease(Math.PI * 2, len), axis: (f, r) => r.multiplyScalar(Math.cos(b)).addScaledVector(f, Math.sin(b)) };
+  }
   return { kind, len: between(50, 140), yaw: zero, pitch: zero, roll: zero };
 }
 
@@ -136,7 +149,14 @@ function stepTrack() {
     gen.seg = gen.queue.shift(); gen.at = 0;
   }
   const { seg } = gen, u = (gen.at + STEP / 2) / seg.len;
-  let yaw = seg.yaw(u) * STEP, pitch = seg.pitch(u) * STEP, roll = seg.roll(u) * STEP;
+  let yaw = seg.yaw(u) * STEP, pitch = seg.pitch(u) * STEP, roll = seg.roll(u) * STEP, pitchRate = seg.pitch(u);
+  if (seg.axis) {
+    const fwd = new THREE.Vector3().copy(AX.fwd).applyQuaternion(gen.q), right = new THREE.Vector3().copy(AX.right).applyQuaternion(gen.q);
+    seg.fixed ??= seg.axis(fwd, right.clone()).normalize();
+    // The share of the turn that pitches the track, for the hops' magnetic gravity.
+    pitchRate = seg.turn(u) * seg.fixed.dot(right);
+    gen.q.premultiply(tq.setFromAxisAngle(seg.fixed, seg.turn(u) * STEP));
+  }
   // Outside corkscrews and loops, ease the frame back upright and level, so turns and hills
   // never accumulate a lean.
   if (seg.kind !== 'cork' && seg.kind !== 'loop') {
@@ -153,7 +173,7 @@ function stepTrack() {
   gen.q.premultiply(tq.setFromAxisAngle(AX.up, yaw)).multiply(tq.setFromEuler(te.set(pitch, 0, roll, 'YXZ'))).normalize();
   gen.p.addScaledVector(tv.copy(AX.fwd).applyQuaternion(gen.q), STEP);
   gen.minY = Math.min(gen.minY, gen.p.y);
-  track.P.push(gen.p.clone()); track.Q.push(gen.q.clone()); track.kind.push(seg.kind); track.pitch.push(seg.pitch(u));
+  track.P.push(gen.p.clone()); track.Q.push(gen.q.clone()); track.kind.push(seg.kind); track.pitch.push(pitchRate);
   gen.at += STEP;
 }
 function extend(s) { while (track.P.length * STEP < s + 2) stepTrack(); }
@@ -516,15 +536,15 @@ function drawSlab() {
     if (li.classList.contains('gap')) { g.font = '400 40px "Geist Mono"'; g.fillStyle = '#8A867D'; g.textAlign = 'center'; g.fillText(li.textContent, W / 2, y + rowH * 0.6); g.textAlign = 'left'; return; }
     if (li.classList.contains('you')) { g.fillStyle = 'rgba(14,143,101,0.14)'; g.fillRect(pad - 12, y + 4, W - pad * 2 + 24, rowH - 4); }
     const rank = li.querySelector('.rank')?.textContent ?? '', pilot = li.querySelector('.pilot')?.textContent ?? '';
-    const who = li.querySelector('.who'), bot = who?.querySelector('.bot path')?.getAttribute('d');
+    const who = li.querySelector('.who'), icon = who?.querySelector('.icon'), iconPath = icon?.querySelector('path')?.getAttribute('d');
     const name = ([...(who?.childNodes ?? [])].find((n) => n.nodeType === Node.TEXT_NODE)?.textContent ?? '').trim(), dist = (li.querySelector('.dist')?.firstChild?.textContent ?? '').trim();
     const base = y + rowH * 0.68;
     let nx = pad + 96;
     g.font = '400 40px "Geist Mono"'; g.fillStyle = '#8A867D'; g.fillText(rank, pad, base);
-    if (bot) {
-      // The board's robot (16 px viewBox) at 40 px, sitting on the baseline.
+    if (iconPath) {
+      // The board's icon (16 px viewBox) at 40 px, sitting on the baseline: a green robot, an ink person.
       g.save(); g.translate(nx, base - 36); g.scale(2.5, 2.5);
-      g.strokeStyle = '#0E8F65'; g.lineWidth = 1.5; g.lineCap = g.lineJoin = 'round'; g.stroke(new Path2D(bot));
+      g.strokeStyle = icon.classList.contains('human') ? '#151513' : '#0E8F65'; g.lineWidth = 1.5; g.lineCap = g.lineJoin = 'round'; g.stroke(new Path2D(iconPath));
       g.restore(); nx += 56;
     }
     g.font = '500 48px "Geist Mono"'; g.fillStyle = '#151513'; g.fillText(name, nx, base);

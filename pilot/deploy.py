@@ -20,8 +20,10 @@ With a stream secret (default jevworks_youtube_key) the App also streams the pag
 import argparse
 import json
 import pathlib
+import re
 import tempfile
 import time
+import urllib.request
 
 import hopsworks
 from hopsworks_common import client
@@ -75,12 +77,20 @@ def main():
     parser.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=True, help="render on a GPU")
     parser.add_argument("--stream-secret", default="jevworks_youtube_key", help="Hopsworks secret holding the stream key")
     parser.add_argument("--stream-url", default="rtmps://a.rtmp.youtube.com/live2", help="RTMP(S) ingest URL")
+    parser.add_argument("--stream-channel", help="YouTube channel the key streams to, watched to reconnect a stuck ingest (default: the one the game previews)")
     parser.add_argument("--no-stream", action="store_true", help="do not stream the page")
     args = parser.parse_args()
     stream = not args.no_stream
     if stream and not args.gpu:
         raise SystemExit("streaming encodes on the GPU: use --gpu or --no-stream")
     res = RESOURCES[args.gpu]
+    channel = args.stream_channel
+    if stream and not channel:
+        with urllib.request.urlopen(args.game_url, timeout=15) as page:
+            found = re.search(r"live_stream\?channel=([\w-]+)", page.read().decode())
+        if not found:
+            raise SystemExit(f"{args.game_url} previews no YouTube channel: pass --stream-channel")
+        channel = found.group(1)
 
     deciders = args.deciders.split(",")
     if not set(deciders) <= {"semif", "kumo", "clef", "jev"}:
@@ -117,6 +127,7 @@ def main():
         "gpu": args.gpu,
         "streamSecret": args.stream_secret if stream else None,
         "streamUrl": args.stream_url if stream else None,
+        "streamChannel": channel if stream else None,
     }
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "config.json"

@@ -99,7 +99,8 @@ async function recordRun({ name, pilot, model, distance, duration, client, runKe
 }
 
 // The top runs, ranked; then the best player and each model pilot missing from them, with its best
-// run and that run's place, so players and every model stay on the board whoever leads it.
+// run and that run's place, so players and every model stay on the board whoever leads it. Each
+// model pilot's first row carries how many runs it has flown.
 async function board() {
   const { rows } = await db.query(
     `SELECT name, pilot, model, distance_m, game_version, created_at FROM runs ORDER BY distance_m DESC, created_at ASC LIMIT $1`,
@@ -114,7 +115,13 @@ async function board() {
      ORDER BY rank`,
     [missing],
   );
-  return [...top, ...below.map((r) => ({ ...r, below: true }))];
+  const { rows: counts } = await db.query(`SELECT pilot, count(*)::int AS runs FROM runs WHERE pilot = ANY($1) GROUP BY pilot`, [PILOTS]);
+  const flown = new Map(counts.map((c) => [c.pilot, c.runs]));
+  return [...top, ...below.map((r) => ({ ...r, below: true }))].map((r) => {
+    const runs = flown.get(r.pilot);
+    flown.delete(r.pilot);
+    return runs ? { ...r, pilotRuns: runs } : r;
+  });
 }
 
 // Muted preview of the pilot's live stream; a click opens the stream on YouTube.
@@ -165,8 +172,10 @@ function seat(id) {
 const clientOf = (req) => createHash('sha256').update(String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress).split(',')[0].trim()).digest('hex').slice(0, 16);
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-// Line robot in front of a model pilot's name. The slab in the scene draws the same path.
-const ROBOT = '<svg class="bot" viewBox="0 0 16 16" aria-label="model"><path d="M8 1.5V4M3 4h10v8.5H3zM6 7.25h.5M9.5 7.25h.5M6 10h4M1.5 7v3M14.5 7v3"/></svg>';
+// Line icon in front of each name: a robot for a model pilot, a person for a player. The slab in
+// the scene draws the same paths.
+const ROBOT = '<svg class="icon bot" viewBox="0 0 16 16" aria-label="model"><path d="M8 1.5V4M3 4h10v8.5H3zM6 7.25h.5M9.5 7.25h.5M6 10h4M1.5 7v3M14.5 7v3"/></svg>';
+const PERSON = '<svg class="icon human" viewBox="0 0 16 16" aria-label="player"><path d="M8 2a2.75 2.75 0 1 1 0 5.5a2.75 2.75 0 1 1 0-5.5zM2.5 14.5c0-3.2 2.4-5.25 5.5-5.25s5.5 2.05 5.5 5.25"/></svg>';
 // Who built each model pilot, credited on its rows.
 const MAKERS = {
   jev: { name: 'TypeSafe', url: 'https://typesafe.ai' },
@@ -176,9 +185,9 @@ const MAKERS = {
 };
 const pilotTag = (r) => {
   const maker = MAKERS[r.pilot];
-  return ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}${maker ? ` · by <a href="${maker.url}" target="_blank" rel="noopener">${maker.name}</a>` : ''}</i>`;
+  return ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}${r.pilotRuns ? ` · ${r.pilotRuns} runs` : ''}${maker ? ` · by <a href="${maker.url}" target="_blank" rel="noopener">${maker.name}</a>` : ''}</i>`;
 };
-const boardRow = (r) => `<li data-rank="${r.rank}"${r.below ? ' class="below"' : ''}><span class="rank">${String(r.rank).padStart(2, '0')}</span><span class="who">${r.pilot === 'player' ? '' : ROBOT}${esc(r.name)}${r.pilot === 'player' ? '' : pilotTag(r)}</span><span class="dist">${r.distance_m} m <i class="ver">v${esc(r.game_version ?? '?')}</i></span></li>`;
+const boardRow = (r) => `<li data-rank="${r.rank}"${r.below ? ' class="below"' : ''}><span class="rank">${String(r.rank).padStart(2, '0')}</span><span class="who">${r.pilot === 'player' ? PERSON : ROBOT}${esc(r.name)}${r.pilot === 'player' ? '' : pilotTag(r)}</span><span class="dist">${r.distance_m} m <i class="ver">v${esc(r.game_version ?? '?')}</i></span></li>`;
 const boardRows = (rows) => rows.length
   ? rows.map((r, i) => `${r.below && !rows[i - 1]?.below ? '<li class="gap" aria-hidden="true">···</li>' : ''}${boardRow(r)}`).join('')
   : '<li class="empty">No runs yet. Be the first.</li>';
@@ -280,7 +289,8 @@ body.flying .reticle { opacity: 0.5; }
 .board .pilot a { color: inherit; pointer-events: auto; }
 .board .rank { color: var(--dim); }
 .board .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.board .bot { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; fill: none; stroke: var(--green); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.board .icon { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; fill: none; stroke: var(--green); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.board .icon.human { stroke: var(--fg); }
 .board .pilot {color: var(--green); font-style: normal; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
 .board .dist { text-align: right; }
 .board .ver { color: var(--dim); font-style: normal; font-size: 11px; margin-left: 6px; }

@@ -40,13 +40,13 @@ At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and t
 
 Analytics: Umami (`analytics.hops.io`, website `Hops Run`) records page views and the events `run-start`, `crash` (`distance`), `board-submit` (`distance`, `rank`) and `queue-wait` (`position`).
 
-Every run carries a `pilot` (`player`, `jev`, `jevworks`, `kumo`, `clef`) and a `model`, so decision models race on the same board. Players are `player`. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, jevworks: SemIf on Qwen3, kumo: NVIDIA, clef: Cloudflare). The best player and each model pilot missing from the top runs are listed below them, each with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
+Every run carries a `pilot` (`player`, `jev`, `jevworks`, `kumo`, `clef`) and a `model`, so decision models race on the same board. Players are `player`, marked with a person; a model pilot's first row also shows how many runs it has flown. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, jevworks: SemIf on Qwen3, kumo: NVIDIA, clef: Cloudflare). The best player and each model pilot missing from the top runs are listed below them, each with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
 
 ## Model pilots
 
 `pilot/` flies the live game for ever: a Hopsworks App on `lex-gpu` (project `jevworks`) runs the page in a headless Chromium rendering on a GPU. The decision models take turns, one run each: each asks its model for every move and posts its run to the board under its own pilot. The page shows who is flying and the decision (move probabilities, forward time, that pilot's run number and best). When the game ships a new version the runner reloads the page between runs.
 
-`DECIDER` is the rotation, comma-separated (e.g. `semif,kumo,jev`; one decider flies alone): `semif` (pilot `jevworks`, the default), `jev` (TypeSafe's Jev API, one Choice question per move; `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`), `kumo` (NVIDIA Kumo Tabular deciding by in-context learning over game situations labelled by the rules, deployed from `pilot/kumo/`; `KUMO_URL`) or `clef` (Cloudflare Clef-Flash answering the same SystemOne request as Jev, deployed from `pilot/clef/`; `CLEF_URL`).
+`DECIDER` is the rotation, comma-separated (e.g. `semif,kumo,jev`; one decider flies alone): `semif` (pilot `jevworks`, the default), `jev` (TypeSafe's Jev API, one Choice question per move; `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`), `kumo` (NVIDIA Kumo Tabular deciding by in-context learning over game situations labelled by the rules, deployed from [jevworks](https://github.com/MagicLex/jevworks) `kumo/`; `KUMO_URL`) or `clef` (Cloudflare Clef-Flash answering the same SystemOne request as Jev, deployed from [jevworks](https://github.com/MagicLex/jevworks) `clef/`; `CLEF_URL`).
 
 The page enters pilot mode only when the runner exposes `jevworksDecide` and `jevworksFinished`; players never see it. The token lives in the Hopsworks secret `jevworks_pilot_token` of the deploying user; the game holds its sha256 in `PILOT_TOKEN_SHA256`.
 
@@ -57,6 +57,8 @@ HOPSWORKS_HOST=10.117.191.130 HOPSWORKS_PROJECT=jevworks HOPSWORKS_API_KEY=... p
 `--deciders` sets the rotation (default `semif,kumo`). Hopsworks deciders are deployments given as `[PROJECT/]NAME`, by default in the App's project: `--semif semif4b`, `--kumo kumo`, `--clef Kumo_Tabular/clef`; each is checked before the App is replaced. With `jev` in the rotation, the App reads its TypeSafe key from the secret `--typesafe-secret` (default `typesafe_api_key`).
 
 With the Hopsworks secret `jevworks_youtube_key` (a YouTube stream key), the App also streams the page live: Chromium's screencast into ffmpeg, NVENC h264 1080p30 at 6 Mbit/s with a silent audio track, over RTMPS to YouTube. One ffmpeg runs for the life of the App: page reloads and browser relaunches never drop the ingest (the last frame is held between pages); only a redeploy of the App does. `--no-stream` deploys without it.
+
+When `--stream-channel` (default: the channel the game previews) shows no live video for 3 minutes while the ingest runs, the runner reconnects the ingest, at most every 10 minutes: an ingest that connects while YouTube is still closing the previous broadcast stays bound to it and never goes live.
 
 `GET /health` on the App returns the pilot flying now, each pilot's runs, best, last distance and model, the game version, WebGL renderer and stream state, and 503 when no decision came in 5 minutes. `GET /frame.jpg` returns what the page shows right now.
 
@@ -87,7 +89,7 @@ The game version is `version` in `package.json`, tagged `v<version>` in git. It 
 | Path | Role |
 | --- | --- |
 | `server.js` | Express server: the page with the leaderboard, the leaderboard API, seats, Postgres |
-| `pilot/` | model pilots: `runner.js` (Chromium + the deciders in turn), `start.sh` (App entrypoint), `deploy.py`; `kumo/`, `clef/` deploy those models |
+| `pilot/` | model pilots: `runner.js` (Chromium + the deciders in turn), `start.sh` (App entrypoint), `deploy.py`. The models they fly with are deployed from [jevworks](https://github.com/MagicLex/jevworks) |
 | `public/game.js` | three.js scene: track generator, hops, thruster, obstacles, speed gates, crash, chase camera, leaderboard form |
 | `public/fonts/` | Geist and Geist Mono (OFL) |
 | `public/hw.svg` | Hopsworks mark |
