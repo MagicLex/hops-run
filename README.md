@@ -12,7 +12,7 @@ Play it at [game.hopsworks.ai](https://game.hopsworks.ai). The pilots fly it aro
 | --- | --- | --- | --- | --- |
 | `qwen` | [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B) with [SemIf](https://github.com/TheoLeeCJ/SemIf) | Reads the situation in plain English and scores each move from the model's logits, in one forward pass | `semif4b`, 1 GPU | [`qwen/`](qwen) |
 | `kumo` | [NVIDIA Kumo Tabular](https://huggingface.co/nvidia/Kumo-Tabular) | Learns the game from 78 labelled situations given in context, with no training step | `kumo`, 2 CPU cores | [`kumo/`](kumo) |
-| `clef` | [Cloudflare Clef-Flash](https://huggingface.co/Cloudflare/clef-flash) | Answers the move as a SystemOne choice question with its joint schema head | `clef`, 1 GPU | [`clef/`](clef) |
+| `[tbd] clef` | [Cloudflare Clef-Flash](https://huggingface.co/Cloudflare/clef-flash) | Answers the move as a SystemOne choice question with its joint schema head | `clef`, 1 GPU | [`clef/`](clef) |
 
 ## Run them on Hopsworks
 
