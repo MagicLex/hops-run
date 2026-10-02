@@ -289,6 +289,8 @@ body.flying .reticle { opacity: 0.5; }
 .board li.empty { display: block; color: var(--dim); text-align: center; }
 .board li.gap { display: block; color: var(--dim); text-align: center; padding: 0 12px; line-height: 1.2; }
 .board .pilot a { color: inherit; pointer-events: auto; }
+.prompt .more { color: var(--green); text-decoration: none; pointer-events: auto; }
+.prompt .more:hover, .prompt .more:focus-visible { text-decoration: underline; }
 .board .rank { color: var(--dim); }
 .board .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board .icon { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; fill: none; stroke: var(--green); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -356,6 +358,7 @@ ${cfg.liveChannel ? liveCard(cfg.liveChannel) : ''}
     <div class="keys label"><span><b>Space</b> Fly</span><span>Steer ← → · Jump ↑ · Duck ↓</span></div>
     <div class="label board-label">Leaderboard</div>
     <ol class="board" id="board">${boardRows(rows)}</ol>
+    <a class="label more" href="https://github.com/MagicLex/jevworks" target="_blank" rel="noopener">Know more about the AI pilots</a>
   </div>
 </div>
 <script type="module" src="game.js"></script>
