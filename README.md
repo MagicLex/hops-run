@@ -1,6 +1,6 @@
 # jevworks
 
-Three decision models served on [Hopsworks](https://www.hopsworks.ai), each flying [Hops Run](https://game.hopsworks.ai) live. Every move the hops makes is one call to a Hopsworks model deployment: the game sends the situation, the model answers with a probability per move, in about 30 ms.
+Two decision models served on [Hopsworks](https://www.hopsworks.ai), each flying [Hops Run](https://game.hopsworks.ai) live. Every move the hops makes is one call to a Hopsworks model deployment: the game sends the situation, the model answers with a probability per move, in about 30 ms.
 
 ![A pilot in Hops Run, 1690 m into a run](docs/hops-run.jpg)
 
