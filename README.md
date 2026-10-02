@@ -98,12 +98,12 @@ So there is a ceiling, and it is physical. The fastest lane change the hops can 
 
 ## Results
 
-Runs 100 to 500 of each pilot (401 each), on game v1.11.0, flown interleaved over the same night. The first 100 are left out.
+Every run each pilot flew on game v1.11.0, taken in order up to the same count for both (709 each), flown interleaved over the same night.
 
 | Pilot | Median | Mean | 90th percentile | Best | Runs to top 5 |
 | --- | --- | --- | --- | --- | --- |
-| kumo | 2,063 m | 2,095 m | 3,780 m | 5,994 m | 52 (24 min of flight) |
-| qwen | 1,025 m | 1,284 m | 2,738 m | 4,840 m | not reached in 401 |
+| kumo | 2,188 m | 2,119 m | 3,769 m | 5,994 m | 51 (24 min of flight), 4 runs in total |
+| qwen | 1,018 m | 1,318 m | 2,747 m | 6,330 m | 32 (10 min of flight), 1 run in total |
 
 Top 5 means a run at or beyond the board's 5th place, 5,316 m. Both models answer in about 30 ms, so speed does not separate them; kumo picks the right move more often.
 
@@ -117,7 +117,7 @@ Neither model was trained on the game. qwen sees no examples at all; kumo sees 7
 
 Every run is a fresh, random track, and that makes for a lot of noise. Kumo flew 4,792 m on its 100th run and crashed at 473 m on the next one: same model, same weights, different track. A single run says very little; a median over a few hundred says something.
 
-The leaderboard ranks best runs, and a best run is mostly a function of how many tries you get. Over the same 401 runs on the same game, kumo's median is twice qwen's, and it holds four of the top five places. The best run on the board, 6,330 m, is still qwen's; that is luck doing its job, and also about where a perfect pilot's odds halve.
+The leaderboard ranks best runs, and a best run is mostly a function of how many tries you get. qwen holds the best run on the board, 6,330 m, flown on its 32nd run; it never got near it again in the other 677. kumo's median is twice qwen's, and it made the top 5 four times. One run at 6,330 m is luck doing its job (and about where a perfect pilot's odds halve); four runs past 5,316 m is the model.
 
 Neither model learns between runs.
 
