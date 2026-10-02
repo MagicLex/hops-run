@@ -1,2 +1,0 @@
-# Installed into the jevworks-inference environment (hops env install -f requirements.txt jevworks-inference).
-jevworks @ git+https://github.com/MagicLex/jevworks@main

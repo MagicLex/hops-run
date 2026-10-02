@@ -1,9 +1,9 @@
-"""Create or update the SemIf deployment in the jevworks Hopsworks project.
+"""Create or update the qwen pilot's deployment: SemIf on Qwen3-4B.
 
 Reads HOPSWORKS_HOST, HOPSWORKS_API_KEY and HOPSWORKS_PROJECT from the
-environment (hopsworks.login defaults). Run from the repository root:
+environment (hopsworks.login defaults):
 
-    python deploy.py [--model Qwen3_0_6B] [--name semif] [--env jevworks-inference]
+    python qwen/deploy.py [--model Qwen3_4B] [--name semif4b] [--env jevworks-inference]
 """
 
 import argparse
@@ -17,13 +17,13 @@ HERE = pathlib.Path(__file__).resolve().parent
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--model", default="Qwen3_0_6B", help="Model registry name")
+    parser.add_argument("--model", default="Qwen3_4B", help="Model registry name")
     parser.add_argument("--model-version", type=int, default=None, help="Model version; latest when omitted")
-    parser.add_argument("--name", default="semif", help="Deployment name")
+    parser.add_argument("--name", default="semif4b", help="Deployment name")
     parser.add_argument("--env", default="jevworks-inference", help="Inference environment")
     parser.add_argument("--cores", type=int, default=4, help="CPU cores requested and limited")
-    parser.add_argument("--memory", type=int, default=6144, help="Memory limit in MB")
-    parser.add_argument("--gpus", type=int, default=0, help="GPUs per instance")
+    parser.add_argument("--memory", type=int, default=24576, help="Memory limit in MB")
+    parser.add_argument("--gpus", type=int, default=1, help="GPUs per instance")
     args = parser.parse_args()
 
     project = hopsworks.login()
