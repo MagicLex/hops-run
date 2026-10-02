@@ -94,6 +94,8 @@ And it only gets harder. The hops starts at 45 m/s and gains 1.6 m/s every secon
 
 So there is a ceiling, and it is physical. The fastest lane change the hops can make takes 0.15 s. From 5000 m, at 134 m/s, some rows arrive closer than that, and a wall in your lane right after a lane change cannot be passed by anyone - human or model. Even a perfect pilot (never wrong, zero decision time) has at best even odds of reaching 6300 m, and less than a 1% chance of reaching 8750 m.
 
+![Share of runs still flying, against a perfect pilot](docs/survival.png)
+
 ## Results
 
 Runs 100 to 500 of each pilot (401 each), on game v1.11.0, flown interleaved over the same night. The first 100 are left out.
@@ -104,6 +106,10 @@ Runs 100 to 500 of each pilot (401 each), on game v1.11.0, flown interleaved ove
 | qwen | 1,025 m | 1,284 m | 2,738 m | 4,840 m | not reached in 401 |
 
 Top 5 means a run at or beyond the board's 5th place, 5,316 m. Both models answer in about 30 ms, so speed does not separate them; kumo picks the right move more often.
+
+![Every run, and the 25-run median](docs/runs.png)
+
+![Best run so far](docs/best.png)
 
 Neither model was trained on the game. qwen sees no examples at all; kumo sees 78 labelled ones in its context and is never trained on them.
 
@@ -175,4 +181,4 @@ pytest
 | `kumo/` | Kumo Tabular predictor, deploy script and requirements. |
 | `clef/` | Clef-Flash predictor, deploy script and requirements. |
 | `tests/test_decide.py` | Integration test against the `semif4b` deployment. |
-| `docs/` | Screenshot. |
+| `docs/` | Screenshot and result charts. |
