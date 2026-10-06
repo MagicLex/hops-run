@@ -87,7 +87,7 @@ def main():
     channel = args.stream_channel
     if stream and not channel:
         with urllib.request.urlopen(args.game_url, timeout=15) as page:
-            found = re.search(r"live_stream\?channel=([\w-]+)", page.read().decode())
+            found = re.search(r'data-channel="([\w-]+)"', page.read().decode())
         if not found:
             raise SystemExit(f"{args.game_url} previews no YouTube channel: pass --stream-channel")
         channel = found.group(1)

@@ -16,6 +16,8 @@
 //                     (no share card when unset)
 //   LIVE_YOUTUBE_CHANNEL  YouTube channel id streaming the model pilots: the start screen shows
 //                         its live preview (none when unset)
+//   LIVE_YOUTUBE_VIDEO    YouTube video id of the pilots' broadcast: the preview plays it instead of
+//                         the channel's current live, which is another broadcast while the channel runs two
 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -34,6 +36,7 @@ const cfg = {
   maxPlayers: Number(process.env.MAX_PLAYERS),
   publicUrl: process.env.PUBLIC_URL ? new URL(process.env.PUBLIC_URL).href : null,
   liveChannel: process.env.LIVE_YOUTUBE_CHANNEL || null,
+  liveVideo: process.env.LIVE_YOUTUBE_VIDEO || null,
   pilotToken: process.env.PILOT_TOKEN_SHA256 ? Buffer.from(process.env.PILOT_TOKEN_SHA256, 'hex') : null,
   umami: process.env.UMAMI_SRC && process.env.UMAMI_WEBSITE_ID ? { src: process.env.UMAMI_SRC, id: process.env.UMAMI_WEBSITE_ID } : null,
 };
@@ -126,11 +129,18 @@ async function board() {
   });
 }
 
-// Muted preview of the pilot's live stream; a click opens the stream on YouTube.
-const liveCard = (channel) => `<a class="live" id="live" href="https://www.youtube.com/channel/${esc(channel)}/live" target="_blank" rel="noopener">
+// Muted preview of the pilot's live stream; a click opens the stream on YouTube. With a video id it plays
+// that broadcast, else the channel's current live. data-channel names the channel the stream goes to
+// (pilot/deploy.py reads it).
+const liveCard = ({ channel, video }) => {
+  const embed = (video ? `https://www.youtube-nocookie.com/embed/${esc(video)}?` : `https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;`)
+    + 'autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1';
+  const href = video ? `https://www.youtube.com/watch?v=${esc(video)}` : `https://www.youtube.com/channel/${esc(channel)}/live`;
+  return `<a class="live" id="live" href="${href}"${channel ? ` data-channel="${esc(channel)}"` : ''} target="_blank" rel="noopener">
   <span class="label head"><span>Feed · <b>AI pilots</b></span><span class="on"><i class="dot"></i>Live</span></span>
-  <span class="screen brackets"><iframe data-src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" src="https://www.youtube-nocookie.com/embed/live_stream?channel=${esc(channel)}&amp;autoplay=1&amp;mute=1&amp;controls=0&amp;playsinline=1" title="AI pilots live on YouTube" allow="autoplay; encrypted-media" tabindex="-1"></iframe></span>
+  <span class="screen brackets"><iframe data-src="${embed}" src="${embed}" title="AI pilots live on YouTube" allow="autoplay; encrypted-media" tabindex="-1"></iframe></span>
 </a>`;
+};
 
 // A model pilot proves itself with the bearer token whose sha256 is PILOT_TOKEN_SHA256.
 function isPilot(req) {
@@ -323,7 +333,7 @@ ${cfg.umami ? `<script defer src="${esc(cfg.umami.src)}" data-website-id="${esc(
 <canvas id="scene"></canvas>
 <div class="grain"></div>
 <div class="flash"></div>
-${cfg.liveChannel ? liveCard(cfg.liveChannel) : ''}
+${cfg.liveChannel || cfg.liveVideo ? liveCard({ channel: cfg.liveChannel, video: cfg.liveVideo }) : ''}
 <div class="canopy brackets"></div>
 <svg class="reticle" id="reticle" viewBox="-80 -14 160 28" aria-hidden="true"><path d="M-76 0h34M42 0h34M-12 8l12-7 12 7M-42 0v5M42 0v5"/></svg>
 <div class="hud">

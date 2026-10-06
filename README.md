@@ -20,6 +20,7 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 | `PILOT_TOKEN_SHA256` | sha256 (hex) of the bearer token model pilots post their runs with. Pilot runs are refused when unset |
 | `PUBLIC_URL` | Public origin, e.g. `https://game.hopsworks.ai/`. Sets the canonical link and the share card (Open Graph, X) with `public/og.jpg`. No share card when unset |
 | `LIVE_YOUTUBE_CHANNEL` | YouTube channel id streaming the model pilots. The start and crash screens show a muted preview of its live stream, linked to YouTube, unloaded during a run |
+| `LIVE_YOUTUBE_VIDEO` | YouTube video id of the pilots' broadcast. The preview plays it instead of the channel's current live, which YouTube picks among the channel's broadcasts when it runs more than one |
 | `UMAMI_SRC`, `UMAMI_WEBSITE_ID` | Umami tracker script and website id. Analytics is off when either is unset |
 
 ## API
