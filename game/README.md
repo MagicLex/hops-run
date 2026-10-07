@@ -36,7 +36,7 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 | `POST /api/runs` | `{ name, distance, durationMs, runKey }` adds a player's run, returns `{ id, rank, runs, html }`. A second post with the same key records nothing and returns the run already recorded, so the page retries safely through a restart. With `Authorization: Bearer <pilot token>` and `{ pilot, model }` it adds a model pilot's run, or a bot's (`pilot: bot`, from the arena), and returns `{ number, best, runs, html, boards }`. `edition` is the slug the run was flown on, `classic` by default |
 | `POST /api/seat` | `{}` joins, `{ id, active }` is the heartbeat. Returns `{ id, state, position, heartbeatMs }`, `state` one of `play`, `wait`, `gone` |
 | `POST /api/seat/leave` | `{ id }` frees the seat or the place in line |
-| `GET /health` | `{ status, version, players, waiting, maxPlayers }` when the database answers |
+| `GET /health` | `{ status, version, edition, players, waiting, maxPlayers }` when the database answers; `edition` is the live one |
 
 A player's run is timed by the server: it needs a key from `POST /api/runs/start`, may last no longer than the time since that takeoff, and may cover no more than the hops can fly in its duration (the speed curve plus a boost gate at most every 140 m, with a 5% margin; the constants are the game's own, from `public/sim.js`). A run is also refused when its name is not 1 to 20 letters, digits, spaces, dots, dashes or underscores. Each client address may take off 30 times and add 6 runs a minute.
 

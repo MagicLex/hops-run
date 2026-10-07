@@ -81,7 +81,9 @@ async function decide(state) {
 }
 
 // --- runs ----------------------------------------------------------------------------------------
-const gameVersion = async () => (await (await fetch(new URL('health', cfg.gameUrl), { signal: AbortSignal.timeout(5000) })).json()).version;
+// What the page serves: the game's version and its live edition. A change to either reaches the pilot
+// between runs, so pilots flying ?edition=live take up each day's edition.
+const gameVersion = async () => { const h = await (await fetch(new URL('health', cfg.gameUrl), { signal: AbortSignal.timeout(5000) })).json(); return `${h.version} · ${h.edition}`; };
 let reloadPending = false;
 
 async function finished(run) {
@@ -100,7 +102,6 @@ async function finished(run) {
   }
   Object.assign(mine, { runs: d.number, best: d.best, last: run.distance });
   console.log(`${pilot} run ${d.number}: ${run.distance} m in ${(run.durationMs / 1000).toFixed(1)} s, best ${d.best} m`);
-  // A new game version reaches the pilot between runs.
   reloadPending = (await gameVersion().catch(() => stats.version)) !== stats.version;
   return d;
 }

@@ -132,7 +132,7 @@ Neither model learns between runs.
 node arena/arena.js --pilots claude-bot,claude-fable-bot --runs 30
 ```
 
-A pilot is a bot from [`bots/`](bots) or a decider (`semif`, `kumo`, `jev`, `clef`, with the settings of [`pilot/`](pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`). It is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once its round trip has passed in run time. The table gives each pilot's median, mean, 90th percentile and best; `--json` gives every run. `--edition` picks what the track holds: the game's `classic`, or an edition from [`arena/editions/`](arena/editions) with moving walls, falling bars, stretches of low gravity or swapped controls, and rules such as changing lane between rows, all held to the game's bounds and passable by construction. [`arena/README.md`](arena/README.md) is the reference for writing one.
+A pilot is a bot from [`bots/`](bots) or a decider (`semif`, `kumo`, `jev`, `clef`, with the settings of [`pilot/`](pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`). It is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once the time it reports for it has passed in run time, so a slow model flies blind as long as on the page and the network to it counts for nothing. The table gives each pilot's median, mean, 90th percentile and best; `--json` gives every run. `--edition` picks what the track holds: the game's `classic`, or an edition from [`arena/editions/`](arena/editions) with moving walls, falling bars, stretches of low gravity or swapped controls, and rules such as changing lane between rows, all held to the game's bounds and passable by construction. [`arena/README.md`](arena/README.md) is the reference for writing one.
 
 The two bots over seeds 1 to 30 on game v1.12.0, edition classic:
 
@@ -141,7 +141,7 @@ The two bots over seeds 1 to 30 on game v1.12.0, edition classic:
 | claude-fable-bot | 6,967 m | 7,060 m | 11,460 m | 20,326 m |
 | claude-bot | 5,964 m | 5,155 m | 7,984 m | 11,351 m |
 
-On the same track, claude-fable-bot flies further on 23 of the 30 seeds. A bot's answer lands after the time it took to compute, so a rerun can differ by a step here and there.
+On the same track, claude-fable-bot flies further on 23 of the 30 seeds. A bot's clock is the run's, so a rerun gives the same runs.
 
 ## Reference
 
@@ -201,6 +201,7 @@ pytest qwen
 | [`game/`](game) | The game: page, server, leaderboard, deploy to `game.hopsworks.ai`. |
 | [`pilot/`](pilot) | Runner flying the live page with the models, as a Hopsworks App. |
 | [`arena/`](arena) | Pilots flown headless on the game's simulation, over the same seeds. |
+| [`designer/`](designer) | A new edition every day: candidates gated by the bots, picked by qwen, published live. |
 | [`qwen/`](qwen) | SemIf predictor, deploy script, environment requirements, integration test. |
 | `qwen/semif/` | SemIf engine, vendored from [SemIf](https://github.com/TheoLeeCJ/SemIf) (MIT). |
 | [`kumo/`](kumo) | Kumo Tabular predictor, deploy script and requirements. |

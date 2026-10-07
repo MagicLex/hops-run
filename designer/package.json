@@ -1,0 +1,11 @@
+{
+  "name": "hops-run-designer",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  }
+}

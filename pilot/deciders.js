@@ -87,6 +87,8 @@ export function createDeciders(cfg) {
     return { moves, probabilities: moves.map((m) => d.answers.move.probabilities[m] ?? 0), forwardMs: d.forward_seconds * 1000, model: String(d.model ?? '').replace(/^hopsworks:/, '') };
   }
   return {
+    // Any question for SemIf, as rows of { id, state, question, options }: the designer's.
+    ask: (input) => decideServed('semif', cfg.semifUrl, input),
     semif: (state) => decideServed('semif', cfg.semifUrl, row(state)),
     kumo: (state) => decideServed('kumo', cfg.kumoUrl, state),
     jev: decideJev,

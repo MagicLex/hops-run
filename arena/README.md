@@ -19,7 +19,7 @@ node arena/arena.js --pilots claude-bot,claude-fable-bot --edition odd --runs 30
 
 The table gives each pilot's median, mean, 90th percentile and best, and what its runs crashed on: a kind of obstacle, or a rule.
 
-Deciders read the settings of [`pilot/`](../pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`. A pilot is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once its round trip has passed in run time.
+Deciders read the settings of [`pilot/`](../pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`. A pilot is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once the time it reports for it (`forwardMs`) has passed in run time: a slow model flies blind as long as on the page, and the network to it counts for nothing. A bot's clock is the run's, so its runs replay exactly.
 
 ## Editions
 

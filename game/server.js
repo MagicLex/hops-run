@@ -460,7 +460,7 @@ app.get('/', async (req, res, next) => {
   try { const { editions: e, edition } = await chosen(req); res.type('html').send(page({ boards: await boards(edition.slug), editions: e, edition })); } catch (err) { next(err); }
 });
 app.get('/health', async (_req, res) => {
-  try { await db.query('SELECT 1'); sweep(Date.now()); res.json({ status: 'ok', version: VERSION, players: seated.size, waiting: waiting.size, maxPlayers: cfg.maxPlayers }); } catch { res.status(503).send('database unavailable'); }
+  try { const { live } = await editions(); sweep(Date.now()); res.json({ status: 'ok', version: VERSION, edition: live?.slug ?? 'classic', players: seated.size, waiting: waiting.size, maxPlayers: cfg.maxPlayers }); } catch { res.status(503).send('database unavailable'); }
 });
 // Join with no id, or heartbeat with the id from the join: `active` when the player did something
 // since the last beat. Answers the seat: play, wait (with position), or gone (join again).
@@ -488,6 +488,15 @@ app.post('/api/seat/leave', (req, res) => {
 });
 app.get('/api/board', async (req, res, next) => {
   try { const { edition } = await chosen(req), b = await boards(edition.slug); res.json({ edition: edition.slug, runs: b.players, html: boardRows(b.players), boards: boardsHtml(b) }); } catch (e) { next(e); }
+});
+// The editions, newest first, with their runs and best: what a designer looks back on.
+app.get('/api/editions', async (_req, res, next) => {
+  try {
+    const rows = await editionBoard();
+    const { rows: specs } = await db.query(`SELECT slug, spec FROM editions WHERE slug = ANY($1)`, [rows.map((e) => e.slug)]);
+    const spec = new Map(specs.map((e) => [e.slug, e.spec]));
+    res.json({ editions: rows.map((e) => ({ ...e, spec: spec.get(e.slug) })) });
+  } catch (e) { next(e); }
 });
 // A designer publishes an edition: it goes live at once. Checked against the game's own bounds.
 app.post('/api/editions', async (req, res, next) => {
