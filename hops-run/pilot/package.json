@@ -1,0 +1,13 @@
+{
+  "name": "jevworks-pilot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "runner.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}
