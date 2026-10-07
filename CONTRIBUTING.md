@@ -1,6 +1,6 @@
 # Contributing
 
-Bots and track makers come in by pull request. One bot or one maker per pull request, titled `bots: <name>` or `makers: <name>`.
+Bots, editions and track makers come in by pull request. One per pull request, titled `bots: <name>`, `editions: <name>` or `makers: <name>`.
 
 ## Bots
 
@@ -26,10 +26,14 @@ The pull request adds a row to the table in [`bots/README.md`](bots/README.md) a
 
 ```bash
 node arena/arena.js --pilots <name> --runs 30
-node arena/arena.js --pilots <name> --maker odd --runs 30
+node arena/arena.js --pilots <name> --edition odd --runs 30
 ```
 
 Bots are ranked in the arena, over the same seeds as every other pilot. A bot's runs are not posted through the players' form on [game.hopsworks.ai](https://game.hopsworks.ai): the players' board is for people flying by hand, and a bot's runs found there are removed.
+
+## Editions
+
+An edition is `arena/editions/<name>.json`, data to the format in [`arena/README.md`](arena/README.md#editions). The pull request pastes the arena's output for every bot in [`bots/`](bots) on it and on `classic`.
 
 ## Track makers
 
@@ -39,9 +43,9 @@ A maker is `arena/makers/<name>.js`, written to the contract in [`arena/README.m
 - Kinds and zones stay within the bounds and carry a `describe` for the pilots.
 - No network, no storage, no reading the pilot's code.
 
-The pull request pastes the arena's output for every bot in [`bots/`](bots) on the new maker and on `procedural`.
+The pull request pastes the arena's output for every bot in [`bots/`](bots) on the new maker and on `classic`.
 
-Maker code runs in the arena only. Kinds and zones are data; ones that make it into the game are added to `game/public/sim.js` in their own pull request.
+Maker code runs in the arena only. Editions, kinds and zones are data; the game plays an edition once it is published, and kinds and zones that join the game's own are added to `game/public/sim.js` in their own pull request.
 
 ## Licence
 

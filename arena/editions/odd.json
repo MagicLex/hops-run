@@ -1,0 +1,9 @@
+{
+  "name": "odd",
+  "describe": "The classic mix with sliding walls, falling bars, zones and rules.",
+  "mix": { "wall": 0.35, "low": 0.2, "bar": 0.15, "sweeper": 0.15, "dropbar": 0.15 },
+  "two": 0.4,
+  "zone": { "p": 0.2, "mix": { "drift": 1, "float": 1, "mirror": 1 } },
+  "rule": { "p": 0.1, "mix": { "bounce": 1, "hold": 1, "air": 1, "duck": 1 } },
+  "gap": [42, 74]
+}

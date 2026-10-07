@@ -132,16 +132,16 @@ Neither model learns between runs.
 node arena/arena.js --pilots claude-bot,claude-fable-bot --runs 30
 ```
 
-A pilot is a bot from [`bots/`](bots) or a decider (`semif`, `kumo`, `jev`, `clef`, with the settings of [`pilot/`](pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`). It is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once its round trip has passed in run time. The table gives each pilot's median, mean, 90th percentile and best; `--json` gives every run. `--maker` picks the track maker: the game's `procedural`, or one from [`arena/makers/`](arena/makers), which can bring obstacle kinds and zones of its own: moving walls, falling bars, stretches of low gravity or swapped controls, all held to the game's bounds and passable by construction. [`arena/README.md`](arena/README.md) is the reference for writing one.
+A pilot is a bot from [`bots/`](bots) or a decider (`semif`, `kumo`, `jev`, `clef`, with the settings of [`pilot/`](pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`). It is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once its round trip has passed in run time. The table gives each pilot's median, mean, 90th percentile and best; `--json` gives every run. `--edition` picks what the track holds: the game's `classic`, or an edition from [`arena/editions/`](arena/editions) with moving walls, falling bars, stretches of low gravity or swapped controls, and rules such as changing lane between rows, all held to the game's bounds and passable by construction. [`arena/README.md`](arena/README.md) is the reference for writing one.
 
-The two bots over seeds 1 to 30 on game v1.12.0:
+The two bots over seeds 1 to 30 on game v1.12.0, edition classic:
 
 | Pilot | Median | Mean | 90th percentile | Best |
 | --- | --- | --- | --- | --- |
-| claude-fable-bot | 6,292 m | 6,114 m | 10,112 m | 11,720 m |
-| claude-bot | 3,543 m | 3,870 m | 7,317 m | 9,317 m |
+| claude-fable-bot | 6,967 m | 7,060 m | 11,460 m | 20,326 m |
+| claude-bot | 5,964 m | 5,155 m | 7,984 m | 11,351 m |
 
-On the same track, claude-fable-bot flies further on 22 of the 30 seeds. A bot's answer lands after the time it took to compute, so a rerun can differ by a step here and there.
+On the same track, claude-fable-bot flies further on 23 of the 30 seeds. A bot's answer lands after the time it took to compute, so a rerun can differ by a step here and there.
 
 ## Reference
 

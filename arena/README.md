@@ -1,32 +1,63 @@
 # Arena
 
-Pilots fly Hops Run headless on the game's simulation ([`game/public/sim.js`](../game/public/sim.js)), each over the same seeds, against a track maker.
+Pilots fly Hops Run headless on the game's simulation ([`game/public/sim.js`](../game/public/sim.js)), each over the same seeds, on an edition of the game or against a track maker.
 
 ```bash
 (cd game && npm ci)
-node arena/arena.js --pilots claude-bot,claude-fable-bot --maker odd --runs 30
+node arena/arena.js --pilots claude-bot,claude-fable-bot --edition odd --runs 30
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `--pilots` | Comma-separated: bots from [`bots/`](../bots), deciders `semif`, `kumo`, `jev`, `clef` |
-| `--maker` | `procedural` (the game's own, default) or a file in [`makers/`](makers) |
+| `--edition` | `classic` (the game's own, default) or a file in [`editions/`](editions) |
+| `--maker` | A track maker from [`makers/`](makers), in place of an edition |
 | `--runs` | Seeds per pilot, default 30 |
 | `--seed` | First seed, default 1 |
 | `--max` | Distance a run stops at, default 100,000 m |
-| `--json` | Every run, as JSON |
+| `--json` | Every run, as JSON, with what ended it |
+
+The table gives each pilot's median, mean, 90th percentile and best, and what its runs crashed on: a kind of obstacle, or a rule.
 
 Deciders read the settings of [`pilot/`](../pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`. A pilot is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once its round trip has passed in run time.
 
-## Writing a track maker
+## Editions
 
-A maker is `makers/<name>.js`. Its default export proposes each row; it may also export `kinds` and `zones` of its own.
+An edition is what a track holds, as data: which kinds of obstacle, zones and rules, and how often each comes. The game plays `classic`; a designer publishes others.
+
+```json
+{
+  "name": "odd",
+  "describe": "The classic mix with sliding walls, falling bars, zones and rules.",
+  "mix": { "wall": 0.35, "low": 0.2, "bar": 0.15, "sweeper": 0.15, "dropbar": 0.15 },
+  "two": 0.4,
+  "zone": { "p": 0.2, "mix": { "drift": 1, "float": 1, "mirror": 1 } },
+  "rule": { "p": 0.1, "mix": { "bounce": 1, "hold": 1, "air": 1, "duck": 1 } },
+  "gap": [42, 74]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `name` | 1 to 40 letters, digits, spaces, dots, colons or dashes |
+| `describe` | What it is, in at most 300 characters |
+| `kinds`, `zones` | Up to 8 each of its own, on top of the game's, with new names |
+| `mix` | Kind to weight: how often each kind fills a lane. Each kind has to fit at least one lane |
+| `two` | Share of rows taking two lanes, 0 to 0.8 |
+| `zone`, `rule` | `{ p, mix }`: the chance a row has one (0 to 0.5) and which, by weight |
+| `gap` | `[min, max]` metres to the next row, within 30 to 90, before rows tighten (to 0.55 times, 2,250 m into a run) |
+
+Each row draws one or two lanes, a kind for each from `mix` (in a lane where the kind fits), a height within the kind's range, a zone and a rule by their chances, and the gap.
+
+**Every row is passable.** Before a row is placed, a witness flies through it: hopses searched through the game's physics with the moves a model pilot has, each already past every earlier row, keeping to every rule. A row the witness cannot pass is not placed and is drawn again. After 12 refusals the row moves 10 m down the track, and a run stops with an error once a row has moved 400 m.
+
+## Track makers
+
+A maker is code, `makers/<name>.js`, run in the arena only: its default export proposes each row, and it may export `kinds` and `zones` of its own. Use one to try what an edition cannot say, such as rows that answer the pilot.
 
 ```js
-import { procedural } from '../../game/public/sim.js';
-
 export default function maker({ rng, at, tighten, run }) {
-  return { lanes: { left: { kind: 'wall', height: 5 } }, zone: 'float', gap: 50 * tighten };
+  return { lanes: { left: { kind: 'wall', height: 5 } }, zone: 'float', rule: 'bounce', gap: 50 * tighten };
 }
 export const kinds = { /* name: kind */ };
 export const zones = { /* name: zone */ };
@@ -47,11 +78,10 @@ It returns:
 | --- | --- |
 | `lanes` | One or two of `left`, `centre`, `right`, each `{ kind, height }`. `height` only for a kind with a `height` range, within it |
 | `zone` | A zone name, or nothing |
-| `gap` | Metres to the next row, within 42 to 74 times `tighten` |
+| `rule` | A rule name, or nothing |
+| `gap` | Metres to the next row, within 30 to 90 times `tighten` |
 
-Every part has to stay on the track wherever its path takes it. A proposal that breaks a rule throws, and the run fails.
-
-**Every row is passable.** Before a row is placed, a witness flies through it: hopses searched through the game's physics with the moves a model pilot has, each already past every earlier row. A row the witness cannot pass is not placed; the maker is asked again, with the stream moved on. After 12 refusals the row moves 10 m down the track, and a run stops with an error once a row has moved 400 m. A maker that always proposes the same impossible row ends there.
+Every part has to stay on the track wherever its path takes it. A proposal that breaks a rule throws, and the run fails. The witness holds a maker's rows as it holds an edition's; a maker that always proposes the same impossible row ends the run.
 
 ## Kinds
 
@@ -97,6 +127,17 @@ float: { describe: 'a float zone: gravity is halved, so jumps fly higher and lon
 
 The game's zones are `drift`, `float` and `mirror` (`ZONES` in `sim.js`).
 
+## Rules
+
+A rule is checked as the hops clears its row; a rule broken counts as a crash. The vocabulary is fixed (`RULES` in `sim.js`):
+
+| Rule | Clear the row |
+| --- | --- |
+| `bounce` | In a different lane from the row before |
+| `hold` | In the same lane as the row before |
+| `air` | In the air |
+| `duck` | Ducking |
+
 ## Bounds
 
 | What | Bound |
@@ -119,28 +160,28 @@ The game's zones are `drift`, `float` and `mirror` (`ZONES` in `sim.js`).
 ```json
 {
   "lane": "centre", "airborne": false, "zone": "mirror",
-  "ahead": [{ "distance": 71.1, "lanes": { "left": "sweeper" }, "zone": null,
+  "ahead": [{ "distance": 71.1, "lanes": { "left": "sweeper" }, "zone": null, "rule": "bounce",
               "parts": [{ "kind": "sweeper", "x": -1.83, "bottom": 0, "top": 4.6, "width": 2.2 }] }],
-  "describe": { "sweeper": "a wall that slides two lanes to the right ...", "mirror": "a mirror zone: ..." }
+  "describe": { "sweeper": "a wall that slides two lanes to the right ...", "mirror": "a mirror zone: ...", "bounce": "a bounce rule: ..." }
 }
 ```
 
 `parts` is where each part stands now, for this hops. The text deciders put `describe` into their prompt.
 
-## Makers here
+## Editions here
 
-| Maker | Rows |
+| Edition | Rows |
 | --- | --- |
-| `procedural` | The game's: walls, low blocks and bars |
-| [`odd`](makers/odd.js) | The game's mix; a third of the rows hold a sweeper or a dropbar, a fifth sit in a zone |
+| `classic` | The game's: walls, low blocks and bars |
+| [`odd`](editions/odd.json) | The classic mix with sweepers and dropbars; a fifth of the rows sit in a zone, a tenth carry a rule |
 
-The two bots over seeds 1 to 30, median distance:
+The two bots over seeds 1 to 30:
 
-| Pilot | `procedural` | `odd` |
-| --- | --- | --- |
-| claude-fable-bot | 6,292 m | 1,057 m |
-| claude-bot | 3,543 m | 978 m |
+| Pilot | `classic` median | `odd` median | What ended their `odd` runs |
+| --- | --- | --- | --- |
+| claude-fable-bot | 6,967 m | 293 m | sweeper 11, duck rule 6, air rule 4, bounce rule 4, hold rule 2, wall 2, dropbar 1 |
+| claude-bot | 5,964 m | 337 m | sweeper 18, duck rule 4, bounce rule 4, air rule 1, hold rule 1, wall 1, dropbar 1 |
 
-Both bots were written against walls, low blocks and bars and read nothing else; on `odd` they fly into sweepers and zones they cannot see, and the better planner loses its lead.
+Both bots were written against walls, low blocks and bars and read nothing else; on `odd` they fly into sweepers, zones and rules they do not read.
 
-Maker code runs in the arena only. Kinds and zones are data, and join the game once they are added to `sim.js`.
+Maker code runs in the arena only. Editions, kinds and zones are data: the game plays an edition once the server publishes it, and a kind or zone joins the game's own once it is added to `sim.js`.

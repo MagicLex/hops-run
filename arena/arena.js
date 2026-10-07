@@ -1,11 +1,12 @@
 // Arena: pilots fly Hops Run headless on the game's own simulation (game/public/sim.js), each over
 // the same seeds, so every pilot meets the same tracks.
 //
-//   node arena/arena.js --pilots claude-bot,claude-fable-bot,kumo [--maker odd] [--runs 30] [--seed 1] [--max 100000] [--json]
+//   node arena/arena.js --pilots claude-bot,claude-fable-bot,kumo [--edition odd | --maker <name>] [--runs 30] [--seed 1] [--max 100000] [--json]
 //
-// A track maker proposes the rows: `procedural` is the game's own, any other is
-// arena/makers/<name>.js, exporting the maker as default and, optionally, `kinds` and `zones` of its
-// own (sim.js checks them against its bounds, and every row against the witness).
+// The track is an edition: `classic` (the game's own) or arena/editions/<name>.json. Or a track
+// maker proposes the rows: arena/makers/<name>.js, exporting the maker as default and, optionally,
+// `kinds` and `zones` of its own. sim.js checks editions, kinds and zones against its bounds, and
+// every row against the witness.
 //
 // A pilot is a bot (bots/<name>/pilot.js, run in a sandbox whose clock is the run's own) or a
 // model decider (semif, kumo, jev, clef), with the settings pilot/runner.js reads: SEMIF_URL,
@@ -17,13 +18,14 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import vm from 'node:vm';
-import { createRun, procedural, DT } from '../game/public/sim.js';
+import { createRun, CLASSIC, DT } from '../game/public/sim.js';
 import { DECIDERS, createDeciders } from '../pilot/deciders.js';
 
 const { values: args } = parseArgs({
   options: {
     pilots: { type: 'string' },
-    maker: { type: 'string', default: 'procedural' },
+    edition: { type: 'string', default: 'classic' },
+    maker: { type: 'string' },
     runs: { type: 'string', default: '30' },
     seed: { type: 'string', default: '1' },
     max: { type: 'string', default: '100000' },
@@ -35,15 +37,22 @@ const RUNS = Number(args.runs), SEED = Number(args.seed), MAX = Number(args.max)
 const FRAME = Math.round(1 / 60 / DT); // steps per 60 Hz frame
 const BETWEEN_RUNS_MS = 5000; // a bot's clock moves on this much between runs, as on the page
 
-async function loadMaker(name) {
-  if (name === 'procedural') return { maker: procedural };
-  if (!/^[\w-]+$/.test(name)) throw new Error(`--maker ${name}: a name from arena/makers/`);
-  const file = new URL(`makers/${name}.js`, import.meta.url);
-  if (!existsSync(file)) throw new Error(`--maker ${name}: no arena/makers/${name}.js`);
-  const m = await import(file);
-  return { maker: m.default, kinds: m.kinds, zones: m.zones };
+// What the runs fly: { edition, maker }, as createRun takes them.
+async function loadTrack({ edition, maker }) {
+  const file = (dir, name, ext) => {
+    if (!/^[\w-]+$/.test(name)) throw new Error(`${name}: a name from arena/${dir}/`);
+    const url = new URL(`${dir}/${name}.${ext}`, import.meta.url);
+    if (!existsSync(url)) throw new Error(`no arena/${dir}/${name}.${ext}`);
+    return url;
+  };
+  if (maker) {
+    const m = await import(file('makers', maker, 'js'));
+    return { label: `maker ${maker}`, edition: { ...CLASSIC, name: maker, kinds: m.kinds, zones: m.zones }, maker: m.default };
+  }
+  if (edition === 'classic') return { label: 'edition classic', edition: CLASSIC };
+  return { label: `edition ${edition}`, edition: JSON.parse(readFileSync(file('editions', edition, 'json'), 'utf8')) };
 }
-const MAKER = await loadMaker(args.maker);
+const TRACK = await loadTrack(args);
 
 // A bot is the browser script it is on the page, run in its own context with the run's clock.
 function loadBot(name) {
@@ -74,7 +83,7 @@ function loadPilot(name) {
 }
 
 async function fly(pilot, seed) {
-  const run = createRun({ seed, ...MAKER }), base = pilot.clock?.ms ?? 0;
+  const run = createRun({ seed, edition: TRACK.edition, maker: TRACK.maker }), base = pilot.clock?.ms ?? 0;
   let pending = null, step = 0;
   while (!run.crash && run.distance < MAX) {
     if (!pending && step % FRAME === 0) {
@@ -87,7 +96,9 @@ async function fly(pilot, seed) {
     if (pending && step >= pending.at) { run.decide(pending.choice); pending = null; }
   }
   if (pilot.clock) pilot.clock.ms = base + run.flightMs + BETWEEN_RUNS_MS;
-  return { seed, distance: Math.round(run.distance), capped: !run.crash, redrawn: run.redrawn, pushed: run.pushed };
+  // What ended the run: the kind of the part hit, or the rule failed.
+  const cause = run.crash && (run.crash.rule ? `${run.crash.rule} rule` : run.crash.row.parts[run.crash.part].kind);
+  return { seed, distance: Math.round(run.distance), cause, capped: !run.crash, redrawn: run.redrawn, pushed: run.pushed };
 }
 
 const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
@@ -103,13 +114,14 @@ for (const name of args.pilots.split(',').map((p) => p.trim())) {
     pilot: name, runs,
     median: quantile(d, 0.5), mean: Math.round(d.reduce((a, b) => a + b, 0) / d.length), p90: quantile(d, 0.9), best: d.at(-1),
     capped: runs.filter((r) => r.capped).length,
+    causes: Object.fromEntries(Object.entries(runs.reduce((n, r) => (r.cause ? { ...n, [r.cause]: (n[r.cause] ?? 0) + 1 } : n), {})).sort((a, b) => b[1] - a[1])),
   });
   if (!args.json) process.stderr.write('\n');
 }
 
-if (args.json) console.log(JSON.stringify({ maker: args.maker, seeds: [SEED, SEED + RUNS - 1], max: MAX, results }, null, 2));
+if (args.json) console.log(JSON.stringify({ track: TRACK.label, seeds: [SEED, SEED + RUNS - 1], max: MAX, results }, null, 2));
 else {
-  console.log(`maker ${args.maker}, seeds ${SEED} to ${SEED + RUNS - 1}${results.some((r) => r.capped) ? `, runs capped at ${MAX} m` : ''}`);
-  console.log(['pilot', 'median', 'mean', 'p90', 'best', 'capped'].map((h) => h.padStart(h === 'pilot' ? 18 : 8)).join(''));
-  for (const r of results) console.log(r.pilot.padStart(18) + [r.median, r.mean, r.p90, r.best, r.capped].map((v) => String(v).padStart(8)).join(''));
+  console.log(`${TRACK.label}, seeds ${SEED} to ${SEED + RUNS - 1}${results.some((r) => r.capped) ? `, runs capped at ${MAX} m` : ''}`);
+  console.log(['pilot', 'median', 'mean', 'p90', 'best', 'capped'].map((h) => h.padStart(h === 'pilot' ? 18 : 8)).join('') + '   crashed on');
+  for (const r of results) console.log(r.pilot.padStart(18) + [r.median, r.mean, r.p90, r.best, r.capped].map((v) => String(v).padStart(8)).join('') + '   ' + Object.entries(r.causes).map(([c, n]) => `${c} ${n}`).join(', '));
 }

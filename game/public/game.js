@@ -477,7 +477,7 @@ let s = START, x = 0, xv = 0, h = HOVER, hv = 0, v = 0, boost = 0, charge = 0, a
 let crashV = 0, timeScale = 1, camX = 0, camH = 0, shake = 0, acc = 0;
 const prev = { s: START, x: 0, h: HOVER };
 const PREPARE_MS = 4; // per frame, placing rows ahead
-let shownZone = null; // the zone named in the status
+let shownStatus = ''; // the status while flying: zone and next rule
 const lerp = THREE.MathUtils.lerp;
 
 function resetScene() {
@@ -532,24 +532,24 @@ function start() {
   lastRun = null; submitted = false;
   runKey = takeoff();
   ui.prompt.hidden = true; form.hidden = true; result.hidden = true;
-  ui.status.textContent = 'Flying'; ui.status.className = 'label flying'; shownZone = null;
+  ui.status.textContent = 'Flying'; ui.status.className = 'label flying'; shownStatus = '';
 }
 
-function crash({ row, part }) {
+function crash({ row, part, rule }) {
   mode = 'crashed';
   document.body.classList.remove('flying');
   ({ s, x, h } = run.hops);
   crashV = v; timeScale = 0.25;
   const { meshes } = rowMeshes.get(row.id);
   for (const m of meshes) if (!m.userData.post) paint(m, RUST);
-  shatterBlock(meshes[part], crashV);
+  if (part !== undefined) shatterBlock(meshes[part], crashV);
   shatterShip(crashV);
   shake = 1.6;
   for (let i = 0; i < 4; i++) emitRing(tailWorld, 0.6 + i * 0.25, 8 + i * 6);
   burst(40, 22, -crashV * 0.3, 1.2);
   flash.style.transition = 'none'; flash.style.opacity = '0.35';
   requestAnimationFrame(() => { flash.style.transition = 'opacity 0.9s ease-out'; flash.style.opacity = '0'; });
-  ui.status.textContent = `Crashed at ${Math.round(run.distance)} m`; ui.status.className = 'label crash';
+  ui.status.textContent = `Crashed at ${Math.round(run.distance)} m${rule ? ` · ${rule} rule` : ''}`; ui.status.className = 'label crash';
   lastRun = { distance: Math.round(run.distance), durationMs: Math.round(run.flightMs), runKey };
   next = createRun({ seed: newSeed() });
   analytics('crash', { distance: lastRun.distance });
@@ -803,8 +803,10 @@ function frame(now) {
   syncTrack(s);
   moveParts();
   if (mode === 'flying') {
-    const zone = run.zone()?.name ?? null;
-    if (zone !== shownZone) { shownZone = zone; ui.status.textContent = zone ? `Flying · ${zone}` : 'Flying'; }
+    // The zone the hops is in, and the rule of the next row to clear.
+    const rule = run.rows.find((r) => r.id >= run.hops.row)?.rule;
+    const label = ['Flying', run.zone()?.name, rule && `${rule} rule`].filter(Boolean).join(' · ');
+    if (label !== shownStatus) { shownStatus = label; ui.status.textContent = label; }
   }
 
   const f = frameAt(s);
