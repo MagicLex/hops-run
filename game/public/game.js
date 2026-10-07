@@ -415,35 +415,47 @@ function shatterBlock(m, fwd) {
 }
 const flash = document.querySelector('.flash');
 
-// --- the leaderboard in the world -----------------------------------------------------------------
-// A paper slab floating over the track. On the start and crash screens it hovers ahead of the hops;
-// once a run starts it stays put and the hops flies under it. Its face is drawn from the board the
-// server rendered into the page (one list per board: players, bots, editions): the HTML lists stay
-// the content, the slab shows the one picked.
+// --- the leaderboards in the world ----------------------------------------------------------------
+// One paper slab per board (players, bots, editions), floating over the track on a carousel: the
+// board in front at full size, the others smaller, set back and turned in on either side. Every
+// CAROUSEL.hold seconds it slides one place on (B at once); a board leaving the front passes behind
+// and comes round the other side. On the start and crash screens the carousel hovers ahead of the
+// hops; once a run starts it stays put and the hops flies under it. Each face is drawn from the
+// board the server rendered into the page: the HTML lists stay the content, the slabs their view.
+// T picks the track on the start and crash screens.
 const SLAB = { w: 16, h: 9, d: 0.6, ahead: 30, lift: 7 }; // bottom edge 2.5 m up: the hops (top 2.3 m) flies under // metres; lift is the centre above the track
-const slabCanvas = document.createElement('canvas');
-slabCanvas.width = 1600; slabCanvas.height = 900;
-const slabTex = new THREE.CanvasTexture(slabCanvas);
-slabTex.colorSpace = THREE.SRGBColorSpace; slabTex.anisotropy = 8;
-const slab = new THREE.Group(), slabFloat = new THREE.Group();
-slabFloat.add(block(SLAB.w, SLAB.h, SLAB.d));
-const slabFace = new THREE.Mesh(new THREE.PlaneGeometry(SLAB.w - 0.24, SLAB.h - 0.24), new THREE.MeshBasicMaterial({ map: slabTex }));
-slabFace.position.z = SLAB.d / 2 + 0.01; // +z faces the chase camera
-slabFloat.add(slabFace);
-slab.add(slabFloat);
+const CAROUSEL = { hold: 9, ease: 2.2, radius: 13, back: 7, side: 0.5, turn: 0.55 }; // seconds, per second, metres, metres, scale, radians
+const slab = new THREE.Group();
 const slabShadow = new THREE.Mesh(new THREE.PlaneGeometry(SLAB.w * 0.9, SLAB.d * 3).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: PAPER.end, transparent: true, opacity: 0.7, depthWrite: false }));
 scene.add(slab, slabShadow);
 let slabS = 0;
+const boardLists = Object.fromEntries([...document.querySelectorAll('ol.board')].map((ol) => [ol.dataset.board, ol]));
+const boardNames = Object.keys(boardLists);
+const boardLabel = document.getElementById('board-label');
+const panes = Object.fromEntries(boardNames.map((name) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1600; canvas.height = 900;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+  const pane = new THREE.Group();
+  pane.add(block(SLAB.w, SLAB.h, SLAB.d));
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(SLAB.w - 0.24, SLAB.h - 0.24), new THREE.MeshBasicMaterial({ map: tex }));
+  face.position.z = SLAB.d / 2 + 0.01; // +z faces the chase camera
+  pane.add(face);
+  slab.add(pane);
+  return [name, { canvas, tex, pane }];
+}));
 
-function drawSlab() {
-  const g = slabCanvas.getContext('2d'), W = slabCanvas.width, H = slabCanvas.height, pad = 64;
+function drawSlab(name) {
+  const { canvas, tex } = panes[name];
+  const g = canvas.getContext('2d'), W = canvas.width, H = canvas.height, pad = 64;
   g.fillStyle = '#FCFBF8'; g.fillRect(0, 0, W, H);
   g.textBaseline = 'alphabetic';
   g.font = '500 38px "Geist Mono"'; g.letterSpacing = '6px'; g.fillStyle = '#8A867D';
-  g.fillText(`${shownBoard.toUpperCase()} · ${edition().name.toUpperCase()}`, pad, pad + 30);
+  g.fillText(`${name.toUpperCase()} · ${edition().name.toUpperCase()}`, pad, pad + 30);
   g.textAlign = 'right'; g.fillText(document.querySelector('.hud .label b')?.textContent?.toUpperCase() ?? '', W - pad, pad + 30); g.textAlign = 'left';
   g.fillStyle = '#151513'; g.fillRect(pad, pad + 58, W - pad * 2, 4);
-  const items = [...boardLists[shownBoard].querySelectorAll('li')];
+  const items = [...boardLists[name].querySelectorAll('li')];
   const rowH = (H - pad * 2 - 80) / Math.max(10, items.length);
   g.letterSpacing = '0px';
   items.forEach((li, i) => {
@@ -453,7 +465,7 @@ function drawSlab() {
     if (li.classList.contains('you')) { g.fillStyle = 'rgba(14,143,101,0.14)'; g.fillRect(pad - 12, y + 4, W - pad * 2 + 24, rowH - 4); }
     const rank = li.querySelector('.rank')?.textContent ?? '', pilot = li.querySelector('.pilot')?.textContent ?? '';
     const who = li.querySelector('.who'), icon = who?.querySelector('.icon'), iconPath = icon?.querySelector('path')?.getAttribute('d');
-    const name = ([...(who?.childNodes ?? [])].find((n) => n.nodeType === Node.TEXT_NODE)?.textContent ?? '').trim(), dist = (li.querySelector('.dist')?.firstChild?.textContent ?? '').trim();
+    const label = ([...(who?.childNodes ?? [])].find((n) => n.nodeType === Node.TEXT_NODE)?.textContent ?? '').trim(), dist = (li.querySelector('.dist')?.firstChild?.textContent ?? '').trim();
     const base = y + rowH * 0.68;
     let nx = pad + 96;
     g.font = '400 40px "Geist Mono"'; g.fillStyle = '#8A867D'; g.fillText(rank, pad, base);
@@ -463,35 +475,35 @@ function drawSlab() {
       g.strokeStyle = icon.classList.contains('human') ? '#151513' : '#0E8F65'; g.lineWidth = 1.5; g.lineCap = g.lineJoin = 'round'; g.stroke(new Path2D(iconPath));
       g.restore(); nx += 56;
     }
-    g.font = '500 48px "Geist Mono"'; g.fillStyle = '#151513'; g.fillText(name, nx, base);
-    if (pilot) { const w = g.measureText(name).width; g.font = '500 30px "Geist Mono"'; g.fillStyle = '#0E8F65'; g.fillText(pilot.toUpperCase(), nx + w + 20, base); }
+    g.font = '500 48px "Geist Mono"'; g.fillStyle = '#151513'; g.fillText(label, nx, base);
+    if (pilot) { const w = g.measureText(label).width; g.font = '500 30px "Geist Mono"'; g.fillStyle = '#0E8F65'; g.fillText(pilot.toUpperCase(), nx + w + 20, base); }
     g.font = '500 48px "Geist Mono"'; g.fillStyle = '#151513'; g.textAlign = 'right'; g.fillText(dist, W - pad, base); g.textAlign = 'left';
     g.fillStyle = '#D9D5CC'; g.fillRect(pad, y + rowH, W - pad * 2, 2);
   });
-  slabTex.needsUpdate = true;
+  tex.needsUpdate = true;
 }
-// The boards take turns on the slab: each holds for CYCLE.hold seconds, then the slab turns edge-on,
-// shows the next and turns back. B moves on at once. T picks the track on the start and crash
-// screens.
-const boardLists = Object.fromEntries([...document.querySelectorAll('ol.board')].map((ol) => [ol.dataset.board, ol]));
-const boardLabel = document.getElementById('board-label');
-const CYCLE = { hold: 9, turn: 1.4 }; // seconds
-let shownBoard = 'players', cycleT = 0;
-function showBoard(name) {
-  shownBoard = name;
-  for (const [n, ol] of Object.entries(boardLists)) ol.hidden = n !== name;
-  drawSlab();
+const drawSlabs = () => boardNames.forEach(drawSlab);
+
+// The carousel: `front` counts the slides (the board in front is front mod the number of boards),
+// `slid` eases towards it, so each pane's place round the circle moves smoothly.
+let front = 0, slid = 0, holdT = 0;
+function nextBoard() {
+  front++; holdT = 0;
+  const shown = boardNames[front % boardNames.length];
+  for (const [n, ol] of Object.entries(boardLists)) ol.hidden = n !== shown;
 }
-const nextBoard = () => { const names = Object.keys(boardLists); showBoard(names[(names.indexOf(shownBoard) + 1) % names.length]); };
-// The slab's turn this frame: 0 while it holds, out to a quarter turn and back from the other side,
-// the next board shown once it is edge-on.
-function turnSlab(dt) {
-  const before = cycleT;
-  cycleT += dt;
-  if (before < CYCLE.hold + CYCLE.turn / 2 && cycleT >= CYCLE.hold + CYCLE.turn / 2) nextBoard();
-  if (cycleT >= CYCLE.hold + CYCLE.turn) cycleT = 0;
-  const p = Math.max(0, cycleT - CYCLE.hold) / CYCLE.turn;
-  return p === 0 ? 0 : p < 0.5 ? p * Math.PI : (p - 1) * Math.PI;
+function turnCarousel(dt, t) {
+  holdT += dt;
+  if (holdT >= CAROUSEL.hold) nextBoard();
+  slid += (front - slid) * Math.min(1, dt * CAROUSEL.ease);
+  const n = boardNames.length;
+  boardNames.forEach((name, i) => {
+    const spot = ((((i - slid) % n) + n + n / 2) % n) - n / 2, a = (spot * 2 * Math.PI) / n, near = (1 + Math.cos(a)) / 2;
+    const { pane } = panes[name];
+    pane.position.set(Math.sin(a) * CAROUSEL.radius, Math.sin(t * 1.1 + i) * 0.25, -(1 - near) * CAROUSEL.back);
+    pane.scale.setScalar(CAROUSEL.side + (1 - CAROUSEL.side) * near);
+    pane.rotation.set(0, -Math.sin(a) * CAROUSEL.turn + Math.sin(t * 0.5 + i) * 0.04, Math.sin(t * 0.7 + i) * 0.025);
+  });
 }
 function fillBoards(html) {
   for (const [n, h] of Object.entries(html)) boardLists[n].innerHTML = h;
@@ -511,9 +523,9 @@ function setTrack(name) {
   refreshBoards();
 }
 for (const b of document.querySelectorAll('#track button')) b.addEventListener('click', () => setTrack(b.dataset.track));
-document.fonts.load('500 48px "Geist Mono"').then(drawSlab, drawSlab);
-for (const ol of Object.values(boardLists)) new MutationObserver(drawSlab).observe(ol, { childList: true, subtree: true, attributes: true });
-document.body.classList.add('in-world'); // the 3D slab now carries the board; the HTML list stays for no-JS and crawlers
+document.fonts.load('500 48px "Geist Mono"').then(drawSlabs, drawSlabs);
+for (const [name, ol] of Object.entries(boardLists)) new MutationObserver(() => drawSlab(name)).observe(ol, { childList: true, subtree: true, attributes: true });
+document.body.classList.add('in-world'); // the 3D slabs now carry the boards; the HTML lists stay for no-JS and crawlers
 
 // --- state ---------------------------------------------------------------------------------------
 const ui = Object.fromEntries(['distance', 'speed', 'top', 'speedbar', 'reticle', 'status', 'prompt', 'charge'].map((id) => [id, document.getElementById(id)]));
@@ -653,7 +665,7 @@ addEventListener('keydown', (e) => {
   if (mode !== 'flying') {
     if (e.code === 'Space') { e.preventDefault(); if (seat.state === 'gone') joinSeat(); else start(); }
     if (e.code === 'KeyT') setTrack(track === 'live' ? 'classic' : 'live');
-    if (e.code === 'KeyB') { nextBoard(); cycleT = 0; }
+    if (e.code === 'KeyB') nextBoard();
     // After a crash, Enter puts the run on the board: straight away with a saved name, else via the field.
     if (e.code === 'Enter' && lastRun && !submitted && !form.hidden) { e.preventDefault(); if (nameInput.value.trim()) form.requestSubmit(); else nameInput.focus(); }
     return;
@@ -929,9 +941,7 @@ function frame(now) {
   // Leaderboard slab: hovers ahead between runs, stays put during one.
   if (!flying) slabS = THREE.MathUtils.lerp(slabS, s + SLAB.ahead, Math.min(1, raw * 2));
   place(slab, slabS, 0, SLAB.lift);
-  slabFloat.position.y = Math.sin(t * 1.1) * 0.25;
-  slabFloat.rotation.z = Math.sin(t * 0.7) * 0.025;
-  slabFloat.rotation.y = Math.sin(t * 0.5) * 0.04 + turnSlab(raw);
+  turnCarousel(raw, t);
   place(slabShadow, slabS, 0, 0.03);
   slab.visible = slabShadow.visible = Math.abs(slabS - s) < AHEAD;
 
