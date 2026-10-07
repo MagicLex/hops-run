@@ -4,9 +4,11 @@
 // x across, h above the surface) and is placed in the world through the frame at s: the hops,
 // obstacles, speed gates, debris and the chase camera, which rolls with the track, upside down
 // included. Gravity is magnetic, towards the track; over a crest at speed the hops lifts off.
-// After a crash the player can put their name and distance on the leaderboard.
+// After a crash the player can put their name and distance on the leaderboard. The run itself (the
+// track, the rows and gates, the hops' flight) is sim.js; this file draws it.
 
 import * as THREE from 'three';
+import { createRun, LANE_X, TRACK_W, AHEAD, BEHIND, SPEED, BOOST, SPRING, STEP, HOVER, GRAVITY, SHIP, GATE_R, START, DT } from './sim.js';
 
 const P = { bg: 0xf1efea, ink: 0x151513, dim: 0x8a867d };
 const PAPER = { top: 0xfcfbf8, side: 0xeae7e0, end: 0xd9d5cc };
@@ -14,31 +16,9 @@ const GREEN = { top: 0x1eb182, side: 0x168a65, end: 0x10664b };
 const RUST = { top: 0xff6a3d, side: 0xc4502d, end: 0x933b20 };
 const MARK = 0x1cb182; // the Hopsworks mark's own green
 
-const LANES = ['left', 'centre', 'right'];
-const LANE_X = 2.6;
-const TRACK_W = LANE_X * 3 + 1.2;
 const HX = TRACK_W / 2;
 const TRACK_T = 0.7; // slab thickness
-const AHEAD = 360, BEHIND = 60;
-const SPEED = { start: 45, max: 160, gain: 1.6 }; // m/s, m/s per s
-const BOOST = { kick: 45, decay: 18 }; // m/s added by a gate, m/s lost per s
-const GAP = { min: 42, max: 74, floor: 0.55, over: 5000 }; // metres between rows, shrinking to floor x over `over` m
-const PAD_GAP = { min: 140, max: 260 };
-const STEP = 1, CHUNK = 64, RIB = 4, ARCH = 160; // metres per track sample, per mesh chunk, between ribs, between arches
-const ALTITUDE = 15; // metres the generator steers the track back towards
-const UNLOCK = { side: 300, wallride: 400, cork: 500, invert: 700, loop: 900 }; // metres before each segment can appear
-// Segments where the frame is meant to lean: the upright correction stays off through them.
-const LEANING = new Set(['turn', 'side', 'cork', 'loop', 'roll', 'held']);
-const HOVER = 1.3, GRAVITY = 45;
-const SPRING = { k: 260, c: 26 }; // lateral spring stiffness and damping
-const JUMP = 16, DUCK = { hover: 0.45, time: 0.7, flat: 0.35, narrow: 0.15 }; // m/s up; hover height, seconds, and how much the hops squeezes when ducking
-// Jump charge: fills while flying and with every cleared row; a jump spends all of it, up to
-// (1 + power) times the base jump.
-const CHARGE = { perSecond: 1 / 25, perRow: 0.08, power: 1.6 };
-// The hops as an ellipsoid for collisions: radii across, up and along, centred where its body is.
-const HULL = { x: 1.0, y: 1.0, z: 1.5 };
-// Obstacle kinds: a wall is dodged sideways, a low block jumped, a bar ducked under or jumped.
-const KIND = { wall: { p: 0.5, h: [4.6, 5.6] }, low: { p: 0.25, h: [0.9, 1.1] }, bar: { p: 0.25, bottom: 1.7, t: 0.6 } };
+const CHUNK = 64, RIB = 4, ARCH = 160; // metres per mesh chunk, between ribs, between arches
 
 // --- renderer, camera ---------------------------------------------------------------------------
 const canvas = document.getElementById('scene');
@@ -67,130 +47,15 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.4);
 sun.position.set(-3, 10, 4);
 scene.add(sun);
 
-// --- randomness ----------------------------------------------------------------------------------
-// The run (track and obstacles) draws from a generator seeded fresh each run; visual noise
-// (particles, grain, shake) draws from Math.random.
-let seed = 1;
-const rng = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-const between = (a, b) => a + rng() * (b - a);
+// --- the run ----------------------------------------------------------------------------------------
+// Visual noise (particles, grain, shake) draws from Math.random; the run from its seed. `run` is the
+// run on screen. `next` is the one flown when Space is pressed: the start and crash screens place
+// its rows ahead of time (sim.js prepare), so takeoff never waits for them.
 const fx = Math.random;
-
-// --- the track: a curve sampled every STEP metres, with its frame ---------------------------------
-// Each segment gives yaw, pitch and roll rates (rad per metre) over its length. `ease` turns by a
-// total angle and ends straight; `wave` swings out to a peak angle and back to zero.
-const ease = (total, len) => (u) => (total / len) * (1 - Math.cos(2 * Math.PI * u));
-const wave = (peak, len) => (u) => ((peak * Math.PI) / len) * Math.sin(2 * Math.PI * u);
-// A loop eased once round (ease(2 * PI)) comes out this share of its length ahead of where it went in.
-const LOOP_RUN = Array.from({ length: 1000 }, (_, i) => Math.cos(2 * Math.PI * ((i + 0.5) / 1000) - Math.sin(2 * Math.PI * ((i + 0.5) / 1000)))).reduce((a, c) => a + c) / 1000;
-const zero = () => 0;
-const track = { P: [], Q: [], kind: [], pitch: [] };
-const gen = { p: new THREE.Vector3(), q: new THREE.Quaternion(), seg: null, at: 0, minY: 0, queue: [] };
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
-const AX = { fwd: V(0, 0, -1), up: V(0, 1, 0), right: V(1, 0, 0) };
-const tv = new THREE.Vector3(), tq = new THREE.Quaternion(), te = new THREE.Euler(0, 0, 0, 'YXZ');
-
-function pickSegment() {
-  const s = track.P.length * STEP;
-  const fwd = tv.copy(AX.fwd).applyQuaternion(gen.q);
-  const heading = Math.atan2(-fwd.x, -fwd.z); // 0 when the track runs down -z
-  const kinds = [['straight', 3], ['turn', 4], ['hill', 4]];
-  if (s > UNLOCK.side) kinds.push(['side', 2]);
-  if (s > UNLOCK.wallride) kinds.push(['wallride', 1.2]);
-  if (s > UNLOCK.cork) kinds.push(['cork', 1.2]);
-  if (s > UNLOCK.invert) kinds.push(['invert', 1]);
-  if (s > UNLOCK.loop) kinds.push(['loop', 1]);
-  let roll = rng() * kinds.reduce((a, [, w]) => a + w, 0), kind = 'straight';
-  for (const [k, w] of kinds) { if ((roll -= w) <= 0) { kind = k; break; } }
-  const side = () => (rng() < 0.5 ? 1 : -1);
-  if (kind === 'turn') {
-    // Turn back towards -z once the heading has wandered; bank into the turn.
-    const dir = Math.abs(heading) > 0.7 ? -Math.sign(heading) : side(), len = between(110, 200);
-    return { kind, len, yaw: ease(dir * between(0.5, 1.3), len), pitch: zero, roll: wave(dir * between(0.3, 0.65), len) };
-  }
-  if (kind === 'side') {
-    // A hard turn banked onto its side, roller coaster style: near vertical mid-corner.
-    const dir = Math.abs(heading) > 0.7 ? -Math.sign(heading) : side(), len = between(200, 300);
-    return { kind, len, yaw: ease(dir * between(0.9, 1.6), len), pitch: zero, roll: wave(dir * between(1.3, 1.57), len) };
-  }
-  if (kind === 'hill') {
-    // Climb or dive, steering the altitude back into a band.
-    const dir = gen.p.y < -5 ? 1 : gen.p.y > 35 ? -1 : side(), len = between(90, 170);
-    return { kind, len, yaw: zero, pitch: wave(dir * between(0.22, 0.45), len), roll: zero };
-  }
-  if (kind === 'wallride' || kind === 'invert') {
-    // Roll onto the side or upside down, stay there a while, roll back.
-    const angle = kind === 'invert' ? Math.PI * side() : (Math.PI / 2) * side(), turn = between(120, 170);
-    return [
-      { kind: 'roll', len: turn, yaw: zero, pitch: zero, roll: ease(angle, turn) },
-      { kind: 'held', len: between(200, 400), yaw: zero, pitch: zero, roll: zero },
-      { kind: 'roll', len: turn, yaw: zero, pitch: zero, roll: ease(-angle, turn) },
-    ];
-  }
-  // Corkscrews and loops are helices: the frame turns once round an axis fixed at their start
-  // (axis, from the frame's forward and right) and comes out parallel to where it went in. The
-  // corkscrew winds round a line 8 to 20 m above the track, the track's up always towards it, so
-  // the hops is pressed on all the way round; it veers a little to the side it rolls to.
-  if (kind === 'cork') {
-    const len = between(400, 560), a = Math.asin((2 * Math.PI * between(8, 20)) / len), dir = side();
-    return { kind, len, yaw: zero, pitch: zero, roll: zero, turn: ease(Math.PI * 2, len), axis: (f, r) => f.multiplyScalar(dir * Math.cos(a)).addScaledVector(r, Math.sin(a)) };
-  }
-  // Loops are 400 to 500 m round (radius 64 to 80 m), so the chase camera sees round them, and
-  // come out 18 to 27 m (two to three track widths) to the side, clear of their own way in.
-  if (kind === 'loop') {
-    const len = between(400, 500), b = Math.asin(between(TRACK_W * 2, TRACK_W * 3) / (len * (1 - LOOP_RUN))) * side();
-    return { kind, len, yaw: zero, pitch: zero, roll: zero, turn: ease(Math.PI * 2, len), axis: (f, r) => r.multiplyScalar(Math.cos(b)).addScaledVector(f, Math.sin(b)) };
-  }
-  return { kind, len: between(50, 140), yaw: zero, pitch: zero, roll: zero };
-}
-
-function stepTrack() {
-  if (!gen.seg || gen.at >= gen.seg.len) {
-    if (!gen.queue.length) gen.queue.push(...[].concat(track.P.length < 220 ? { kind: 'straight', len: 220, yaw: zero, pitch: zero, roll: zero } : pickSegment()));
-    gen.seg = gen.queue.shift(); gen.at = 0;
-  }
-  const { seg } = gen, u = (gen.at + STEP / 2) / seg.len;
-  let yaw = seg.yaw(u) * STEP, pitch = seg.pitch(u) * STEP, roll = seg.roll(u) * STEP, pitchRate = seg.pitch(u);
-  if (seg.axis) {
-    const fwd = new THREE.Vector3().copy(AX.fwd).applyQuaternion(gen.q), right = new THREE.Vector3().copy(AX.right).applyQuaternion(gen.q);
-    seg.fixed ??= seg.axis(fwd, right.clone()).normalize();
-    // The share of the turn that pitches the track, for the hops' magnetic gravity.
-    pitchRate = seg.turn(u) * seg.fixed.dot(right);
-    gen.q.premultiply(tq.setFromAxisAngle(seg.fixed, seg.turn(u) * STEP));
-  }
-  // Outside corkscrews and loops, ease the frame back upright and level, so turns and hills
-  // never accumulate a lean.
-  if (seg.kind !== 'cork' && seg.kind !== 'loop') {
-    const right = tv.copy(AX.right).applyQuaternion(gen.q);
-    if (!LEANING.has(seg.kind)) roll -= right.y * 0.03 * STEP;
-    // Hold the nose towards a slope that brings the altitude back to the band around ALTITUDE,
-    // through the local up: no effect on a side, reversed upside down.
-    const upY = tv.copy(AX.up).applyQuaternion(gen.q).y;
-    const want = THREE.MathUtils.clamp(-(gen.p.y - ALTITUDE) * 0.004, -0.12, 0.12);
-    if (seg.kind !== 'hill') pitch -= (tv.copy(AX.fwd).applyQuaternion(gen.q).y - want) * upY * 0.02 * STEP;
-  }
-  // Yaw turns about the world vertical, so a corner banked onto its side still turns on the level;
-  // pitch and roll are about the track's own axes.
-  gen.q.premultiply(tq.setFromAxisAngle(AX.up, yaw)).multiply(tq.setFromEuler(te.set(pitch, 0, roll, 'YXZ'))).normalize();
-  gen.p.addScaledVector(tv.copy(AX.fwd).applyQuaternion(gen.q), STEP);
-  gen.minY = Math.min(gen.minY, gen.p.y);
-  track.P.push(gen.p.clone()); track.Q.push(gen.q.clone()); track.kind.push(seg.kind); track.pitch.push(pitchRate);
-  gen.at += STEP;
-}
-function extend(s) { while (track.P.length * STEP < s + 2) stepTrack(); }
-
-// Frame at s: position, orientation and its axes, interpolated between samples.
-const F = { p: new THREE.Vector3(), q: new THREE.Quaternion(), fwd: new THREE.Vector3(), up: new THREE.Vector3(), right: new THREE.Vector3() };
-function frameAt(s, out = F) {
-  s = Math.max(0, s);
-  extend(s);
-  const i = Math.floor(s / STEP), f = s / STEP - i;
-  out.p.lerpVectors(track.P[i], track.P[i + 1], f);
-  out.q.slerpQuaternions(track.Q[i], track.Q[i + 1], f);
-  out.fwd.copy(AX.fwd).applyQuaternion(out.q); out.up.copy(AX.up).applyQuaternion(out.q); out.right.copy(AX.right).applyQuaternion(out.q);
-  return out;
-}
-const pitchAt = (s) => { extend(s); return track.pitch[Math.floor(Math.max(0, s) / STEP)]; };
-const kindAt = (s) => { extend(s); return track.kind[Math.floor(Math.max(0, s) / STEP)]; };
+const newSeed = () => (Math.random() * 2 ** 31) | 0;
+let run = createRun({ seed: newSeed() }), next = run;
+const frameAt = (s, out) => run.track.frameAt(s, out);
 // World point at track coordinates.
 const at = (s, x, h, out = new THREE.Vector3()) => { const f = frameAt(s); return out.copy(f.p).addScaledVector(f.right, x).addScaledVector(f.up, h); };
 function place(obj, s, x, h) { const f = frameAt(s); obj.position.copy(f.p).addScaledVector(f.right, x).addScaledVector(f.up, h); obj.quaternion.copy(f.q); return obj; }
@@ -291,33 +156,39 @@ const chevrons = (() => {
 const padMat = new THREE.MeshBasicMaterial({ map: chevrons, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide });
 const padGeo = new THREE.PlaneGeometry(LANE_X - 0.7, PAD_LEN);
 padGeo.rotateX(-Math.PI / 2); // lie flat in the frame; the texture's up points along the way of travel
-const GATE_R = 1.7; // ring radius, centred at hover height
 const gateFrame = new THREE.TorusGeometry(GATE_R, 0.2, 4, 6);
 const gateInner = new THREE.TorusGeometry(GATE_R - 0.32, 0.07, 3, 6);
 const gateEdges = new THREE.EdgesGeometry(gateFrame, 20);
 for (const g of [padGeo, gateFrame, gateInner, gateEdges]) shared.add(g);
 const gateMat = new THREE.MeshLambertMaterial({ color: PAPER.top, flatShading: true });
 const gateGlow = new THREE.MeshBasicMaterial({ color: MARK });
-let pads = [];
-function spawnPad(ps) {
-  const l = Math.floor(rng() * 3), lx = (l - 1) * LANE_X;
-  const floor = place(new THREE.Mesh(padGeo, padMat), ps, lx, 0.03);
+const padMeshes = new Map(); // gate id -> { floor, ring, spin, used }
+function showPad(pad) {
+  const lx = (pad.lane - 1) * LANE_X;
+  const floor = place(new THREE.Mesh(padGeo, padMat), pad.s, lx, 0.03);
   const ring = new THREE.Group();
   ring.add(new THREE.Mesh(gateFrame, gateMat), new THREE.Mesh(gateInner, gateGlow), new THREE.LineSegments(gateEdges, inkMat));
   const spin = new THREE.Group();
   spin.add(ring);
-  place(spin, ps, lx, HOVER);
+  place(spin, pad.s, lx, HOVER);
   scene.add(floor, spin);
-  pads.push({ s: ps, lane: l, floor, ring, spin, used: false });
+  padMeshes.set(pad.id, { floor, ring, spin, used: false });
+}
+
+// --- obstacles: a row's boxes as paper blocks ---------------------------------------------------
+const rowMeshes = new Map(); // row id -> { meshes (one per box), flash }
+function showRow(row) {
+  const meshes = row.boxes.map((u) => { const m = place(block(u.hw * 2, u.hh * 2, u.hd * 2), u.s, u.x, u.h); m.userData = u; scene.add(m); return m; });
+  rowMeshes.set(row.id, { meshes, flash: 0 });
 }
 
 // --- the hops: the Hopsworks mark in low poly ------------------------------------------------------
 // An ovoid of revolution around z, nose at -z. The front band is one smooth cap; the bands behind
 // are cut into staggered, domed scales that overlap like shingles (each band starts under the
 // previous one, its rear edge lifted), over a dark green core that reads as shadow between them.
-const LENGTH = 3.0, RADIUS = 1.0;
+const { length: LENGTH, radius: RADIUS, nose: NOSE } = SHIP;
 const profile = (t) => RADIUS * Math.pow(Math.sin(Math.PI * Math.min(Math.max(t, 0), 1) ** 0.85), 0.7); // t: 0 nose, 1 tail
-const along = (t) => LENGTH * (t - 0.42);
+const along = (t) => LENGTH * (t - NOSE);
 const markMat = new THREE.MeshLambertMaterial({ color: MARK, flatShading: true, side: THREE.DoubleSide });
 // A closed solid patch of the ovoid: an outer face (domed by puff, rear edge lifted by lift), an
 // inner face THICK below it, and the four walls between them, so no edge is ever paper thin.
@@ -562,56 +433,27 @@ document.body.classList.add('in-world'); // the 3D slab now carries the board; t
 const ui = Object.fromEntries(['distance', 'speed', 'speedbar', 'reticle', 'status', 'prompt', 'charge'].map((id) => [id, document.getElementById(id)]));
 const grain = document.querySelector('.grain');
 let mode = 'ready'; // ready | flying | crashed
-let flightMs = 0;
-let speed = 0, boost = 0, distance = 0, s = 0, x = 0, xv = 0, h = HOVER, hv = 0, lane = 1;
-let crashV = 0, timeScale = 1, camX = 0, camH = 0, charge = 0, duckAmt = 0;
-let nextRowAt = 0, nextPadAt = 0, rows = [], shake = 0, squash = 0, airborne = false, hover = HOVER, duckT = 0;
-const START = CHASE.back + 10; // so the camera starts on the track
+// What is drawn: while flying, the hops as the run has it, between its last two steps; on the start
+// screen it weaves across the lanes, after a crash the view slides on and slows.
+let s = START, x = 0, xv = 0, h = HOVER, hv = 0, v = 0, boost = 0, charge = 0, airborne = false, hover = HOVER;
+let crashV = 0, timeScale = 1, camX = 0, camH = 0, shake = 0, acc = 0;
+const prev = { s: START, x: 0, h: HOVER };
+const PREPARE_MS = 4; // per frame, placing rows ahead
+const lerp = THREE.MathUtils.lerp;
 
-const inLoop = (ps) => { const k = kindAt(ps); return k === 'cork' || k === 'loop'; };
-function spawnRow(rs) {
-  // One or two lanes hold an obstacle, never all three.
-  const taken = [...LANES].sort(() => rng() - 0.5).slice(0, rng() < 0.45 ? 2 : 1);
-  const lanes = {}, meshes = [];
-  for (const l of taken) {
-    const roll = rng(), kind = roll < KIND.wall.p ? 'wall' : roll < KIND.wall.p + KIND.low.p ? 'low' : 'bar';
-    lanes[l] = kind;
-    const lx = (LANES.indexOf(l) - 1) * LANE_X, w = LANE_X - 0.4;
-    if (kind === 'bar') {
-      // Full lane wide on thin posts at the lane edges, so a ducking hops squeezes through.
-      const { bottom, t } = KIND.bar, bw = LANE_X - 0.1;
-      const beam = place(block(bw, t, 1.0), rs, lx, bottom + t / 2);
-      beam.userData = { kind, s: rs, x: lx, h: bottom + t / 2, hw: bw / 2, hh: t / 2, hd: 0.5 };
-      for (const px of [-bw / 2 + 0.08, bw / 2 - 0.08]) { const post = place(block(0.16, bottom, 0.16), rs, lx + px, bottom / 2); post.userData = { kind: 'post', s: rs, x: lx + px, h: bottom / 2, hw: 0.08, hh: bottom / 2, hd: 0.08 }; meshes.push(post); scene.add(post); }
-      meshes.push(beam); scene.add(beam);
-    } else {
-      const [lo, hi] = KIND[kind].h, bh = between(lo, hi);
-      const d = kind === 'wall' ? 1.6 : 2.2;
-      const b = place(block(w, bh, d), rs, lx, bh / 2);
-      b.userData = { kind, s: rs, x: lx, h: bh / 2, hw: w / 2, hh: bh / 2, hd: d / 2 };
-      meshes.push(b); scene.add(b);
-    }
-  }
-  rows.push({ s: rs, lanes, meshes, cleared: false, flash: 0 });
-}
-
-function reset() {
-  for (const r of rows) for (const m of r.meshes) drop(m);
-  for (const p of pads) { drop(p.floor); drop(p.spin); }
+function resetScene() {
+  for (const [, r] of rowMeshes) for (const m of r.meshes) drop(m);
+  for (const [, p] of padMeshes) { drop(p.floor); drop(p.spin); }
   for (const st of streaks) drop(st.line);
   for (const [, g] of chunks) drop(g);
-  chunks.clear();
+  rowMeshes.clear(); padMeshes.clear(); chunks.clear();
   clearDebris();
   rebuildShip();
-  rows = []; pads = []; streaks = [];
-  seed = (Math.random() * 2 ** 31) | 0;
-  track.P = []; track.Q = []; track.kind = []; track.pitch = [];
-  gen.p.set(0, 0, 0); gen.q.identity(); gen.seg = null; gen.at = 0; gen.minY = 0; gen.queue = [];
-  track.P.push(gen.p.clone()); track.Q.push(gen.q.clone()); track.kind.push('straight'); track.pitch.push(0);
-  timeScale = 1;
-  speed = SPEED.start; boost = 0; distance = 0; s = START; x = 0; xv = 0; lane = 1;
-  h = HOVER; hv = 0; airborne = false; hover = HOVER; duckT = 0; camX = 0; camH = 0; charge = 0;
-  nextRowAt = START + 110; nextPadAt = START + 200; nextStreakAt = START;
+  streaks = [];
+  timeScale = 1; acc = 0;
+  s = START; x = 0; xv = 0; h = HOVER; hv = 0; v = SPEED.start; boost = 0; charge = 0; airborne = false; hover = HOVER; camX = 0; camH = 0;
+  Object.assign(prev, { s, x, h });
+  nextStreakAt = START;
   slabS = s + SLAB.ahead;
 }
 
@@ -644,29 +486,33 @@ function start() {
   if (seat.state !== 'play') return;
   analytics('run-start');
   showLive(false);
-  reset();
+  run = next ?? createRun({ seed: newSeed() }); next = null;
+  resetScene();
   mode = 'flying';
   document.body.classList.add('flying');
-  flightMs = 0; lastRun = null; submitted = false; pilot.armed = null;
+  lastRun = null; submitted = false;
   runKey = takeoff();
   ui.prompt.hidden = true; form.hidden = true; result.hidden = true;
   ui.status.textContent = 'Flying'; ui.status.className = 'label flying';
 }
 
-function crash(row, hitMesh) {
+function crash({ row, box }) {
   mode = 'crashed';
   document.body.classList.remove('flying');
-  crashV = speed + boost; timeScale = 0.25;
-  for (const m of row.meshes) if (m.userData.kind !== 'post') paint(m, RUST);
-  shatterBlock(hitMesh, crashV);
+  ({ s, x, h } = run.hops);
+  crashV = v; timeScale = 0.25;
+  const { meshes } = rowMeshes.get(row.id);
+  for (const m of meshes) if (m.userData.kind !== 'post') paint(m, RUST);
+  shatterBlock(meshes[row.boxes.indexOf(box)], crashV);
   shatterShip(crashV);
   shake = 1.6;
   for (let i = 0; i < 4; i++) emitRing(tailWorld, 0.6 + i * 0.25, 8 + i * 6);
   burst(40, 22, -crashV * 0.3, 1.2);
   flash.style.transition = 'none'; flash.style.opacity = '0.35';
   requestAnimationFrame(() => { flash.style.transition = 'opacity 0.9s ease-out'; flash.style.opacity = '0'; });
-  ui.status.textContent = `Crashed at ${Math.round(distance)} m`; ui.status.className = 'label crash';
-  lastRun = { distance: Math.round(distance), durationMs: Math.round(flightMs), runKey };
+  ui.status.textContent = `Crashed at ${Math.round(run.distance)} m`; ui.status.className = 'label crash';
+  lastRun = { distance: Math.round(run.distance), durationMs: Math.round(run.flightMs), runKey };
+  next = createRun({ seed: newSeed() });
   analytics('crash', { distance: lastRun.distance });
   if (PILOT) finished(lastRun);
   setTimeout(() => {
@@ -680,19 +526,34 @@ function crash(row, hitMesh) {
   }, 900);
 }
 
-function steer(move) {
-  const before = lane;
-  if (move === 'left') lane = Math.max(0, lane - 1);
-  if (move === 'right') lane = Math.min(2, lane + 1);
-  if (move === 'up' && !airborne) {
-    hv += JUMP * (1 + CHARGE.power * charge); airborne = true; squash = 0.3 + charge * 0.2;
-    for (let i = 0; i <= Math.round(charge * 3); i++) emitRing(tailWorld, 0.45 + i * 0.15, 5 + i * 4);
-    burst(6 + Math.round(charge * 18), 5 + charge * 8, 2 + charge * 6);
-    shake = Math.max(shake, charge * 0.5);
-    charge = 0;
-  }
-  if (move === 'down') { duckT = DUCK.time; squash = Math.max(squash, 0.2); }
-  if (lane !== before) for (let i = 0; i < 5; i++) emitPuff(tailWorld, (before - lane) * (4 + fx() * 4), fx() * 2, 3 + fx() * 3, 0.45);
+const steer = (move) => run.steer(move);
+
+// What a step of the run did, drawn: rings and sparks, the rows' flashes, gates, the crash.
+function show(e) {
+  if (e.type === 'jump') {
+    for (let i = 0; i <= Math.round(e.charge * 3); i++) emitRing(tailWorld, 0.45 + i * 0.15, 5 + i * 4);
+    burst(6 + Math.round(e.charge * 18), 5 + e.charge * 8, 2 + e.charge * 6);
+    shake = Math.max(shake, e.charge * 0.5);
+  } else if (e.type === 'lane') {
+    for (let i = 0; i < 5; i++) emitPuff(tailWorld, (e.from - e.to) * (4 + fx() * 4), fx() * 2, 3 + fx() * 3, 0.45);
+  } else if (e.type === 'land') {
+    shake = Math.max(shake, Math.min(-e.hv / 40, 0.8));
+    emitRing(tailWorld, 0.5, 6); burst(8, 8, 2);
+  } else if (e.type === 'gate') {
+    const p = padMeshes.get(e.pad.id);
+    if (p) p.used = true;
+    shake = Math.max(shake, 0.35);
+    emitRing(tailWorld, 0.6, 7); emitRing(tailWorld, 0.8, 10); burst(12, 6, 10);
+  } else if (e.type === 'clear') {
+    const r = rowMeshes.get(e.row.id);
+    if (r) { r.flash = 1; for (const m of r.meshes) if (m.userData.kind !== 'post') paint(m, GREEN); }
+  } else if (e.type === 'drop') {
+    for (const m of rowMeshes.get(e.row.id)?.meshes ?? []) drop(m);
+    rowMeshes.delete(e.row.id);
+  } else if (e.type === 'unpad') {
+    const p = padMeshes.get(e.pad.id);
+    if (p) { drop(p.floor); drop(p.spin); padMeshes.delete(e.pad.id); }
+  } else if (e.type === 'crash') crash(e);
 }
 
 addEventListener('keydown', (e) => {
@@ -807,14 +668,14 @@ addEventListener('pageshow', (e) => { if (e.persisted) joinSeat(); }); // back f
 joinSeat();
 
 // --- model pilot ---------------------------------------------------------------------------------
-// The pilot is asked for a move whenever no request is in flight. Jump and duck are armed against
-// the nearest row and fired LEAD seconds before it, so the hops tops its arc, or is lowest, as it
-// crosses; lane changes apply at once. After a crash the run is posted, and the pilot takes off
-// again RESTART_MS later, time enough to see the crash and the result.
-const LEAD = { up: 0.3, down: 0.25 }, RESTART_MS = 4000;
+// The pilot is asked for a move whenever no request is in flight, and the run flies its answer
+// (sim.js decide: jumps and ducks armed against the next row, lane changes at once). After a crash
+// the run is posted, and the pilot takes off again RESTART_MS later, time enough to see the crash
+// and the result.
+const RESTART_MS = 4000;
 const mind = document.getElementById('mind'), pilotEl = document.getElementById('pilot');
 const moveEls = Object.fromEntries([...mind.querySelectorAll('.move')].map((el) => [el.dataset.move, el]));
-const pilot = { asking: false, armed: null, restartAt: 0, name: '', model: '', record: '' };
+const pilot = { asking: false, restartAt: 0, name: '', model: '', record: '' };
 const clean = (text) => String(text).replace(/[<>&]/g, '');
 function showPilot(timing = '') {
   pilotEl.textContent = [pilot.name, pilot.model, pilot.record, timing].filter(Boolean).join(' · ');
@@ -822,9 +683,9 @@ function showPilot(timing = '') {
 async function ask() {
   if (pilot.asking || mode !== 'flying') return;
   pilot.asking = true;
-  const ahead = rows.filter((r) => r.s > s + 0.8).sort((a, b) => a.s - b.s).map((r) => ({ distance: r.s - s, lanes: r.lanes }));
+  const flown = run;
   try {
-    const d = await window.hopsRunDecide({ lane: LANES[lane], airborne, ahead });
+    const d = await window.hopsRunDecide(flown.view());
     const best = d.moves[d.probabilities.indexOf(Math.max(...d.probabilities))];
     for (const [move, el] of Object.entries(moveEls)) {
       const i = d.moves.indexOf(move);
@@ -836,11 +697,7 @@ async function ask() {
     if (d.pilot !== pilot.name) pilot.record = ''; // the pilots take turns: a record is its own pilot's
     pilot.name = d.pilot; pilot.model = d.model;
     showPilot(`${d.forwardMs.toFixed(0)} ms`);
-    if (mode === 'flying') {
-      const next = rows.find((r) => !r.cleared && r.s > s);
-      if ((best === 'up' || best === 'down') && next) pilot.armed = { move: best, row: next };
-      else steer(best);
-    }
+    if (mode === 'flying' && run === flown) run.decide(best);
   } catch (err) {
     pilotEl.innerHTML = `<span class="err">Pilot unavailable: ${clean(err.message).slice(0, 80)}</span>`;
   } finally {
@@ -872,7 +729,7 @@ if (PILOT) {
 // --- loop ----------------------------------------------------------------------------------------
 const clock = new THREE.Timer();
 const camUp = V(0, 1, 0), look = V(), camF = { p: V(), q: new THREE.Quaternion(), fwd: V(), up: V(), right: V() };
-reset();
+resetScene();
 
 function frame(now) {
   clock.update(now);
@@ -882,39 +739,32 @@ function frame(now) {
   const t = clock.getElapsed();
   const flying = mode === 'flying';
   if (flying) {
-    speed = Math.min(SPEED.max, speed + SPEED.gain * dt);
-    boost = Math.max(0, boost - BOOST.decay * dt);
-    charge = Math.min(1, charge + CHARGE.perSecond * dt);
-    flightMs += dt * 1000;
     if (PILOT) ask();
-  }
+    // The run flies in fixed steps; the view sits between the last two.
+    acc += dt;
+    while (acc >= DT && !run.crash) { Object.assign(prev, { s: run.hops.s, x: run.hops.x, h: run.hops.h }); run.tick(); acc -= DT; }
+    run.prepare(PREPARE_MS);
+    const { rows, pads } = run.inView();
+    for (const r of rows) if (!rowMeshes.has(r.id)) showRow(r);
+    for (const p of pads) if (!padMeshes.has(p.id)) showPad(p);
+    for (const e of run.events.splice(0)) show(e);
+  } else next?.prepare(PREPARE_MS);
   if (PILOT && !flying && seat.state === 'play' && now >= pilot.restartAt) start();
-  if (mode === 'crashed') crashV = Math.max(0, crashV - crashV * 2.5 * dt - 4 * dt);
-  const v = flying ? speed + boost : mode === 'ready' ? 22 : crashV;
-  distance += flying ? v * dt : 0;
-  s += v * dt;
-  syncTrack(s);
-
-  // Lateral spring towards the target lane (in ready mode, a slow weave).
-  const tx = mode === 'ready' ? Math.sin(t * 0.9) * LANE_X : (lane - 1) * LANE_X;
-  xv += ((tx - x) * SPRING.k - xv * SPRING.c) * dt;
-  x += xv * dt;
-
-  // Height above the track under magnetic gravity. Where the track curves away beneath the hops
-  // (a crest, pitch rate below zero) faster than gravity pulls, the hops lifts off; where it
-  // curves up into it (a dip, a loop) it is pressed down.
-  duckT = Math.max(0, duckT - dt);
-  hover = THREE.MathUtils.lerp(hover, duckT > 0 ? DUCK.hover : HOVER, Math.min(1, dt * 18));
-  hv += (-GRAVITY - v * v * pitchAt(s)) * dt;
-  h += hv * dt;
-  if (h <= hover) {
-    if (airborne && -hv > 4) {
-      squash = Math.min(-hv / 25, 0.45);
-      shake = Math.max(shake, Math.min(-hv / 40, 0.8));
-      emitRing(tailWorld, 0.5, 6); burst(8, 8, 2);
+  if (mode === 'flying') {
+    const b = run.hops, a = acc / DT;
+    s = lerp(prev.s, b.s, a); x = lerp(prev.x, b.x, a); h = lerp(prev.h, b.h, a);
+    ({ xv, hv, boost, charge, airborne, hover } = b);
+    v = b.speed + b.boost;
+  } else {
+    if (mode === 'crashed') crashV = Math.max(0, crashV - crashV * 2.5 * dt - 4 * dt);
+    v = mode === 'ready' ? 22 : crashV;
+    s += v * dt;
+    if (mode === 'ready') { // a slow weave on the lateral spring
+      xv += ((Math.sin(t * 0.9) * LANE_X - x) * SPRING.k - xv * SPRING.c) * dt;
+      x += xv * dt;
     }
-    h = hover; hv = 0; airborne = false;
-  } else if (h > hover + 0.3) airborne = true;
+  }
+  syncTrack(s);
 
   const f = frameAt(s);
   ship.position.copy(f.p).addScaledVector(f.right, x);
@@ -926,9 +776,8 @@ function frame(now) {
   tilt.rotation.y = -xv * 0.018;
   tilt.rotation.z = THREE.MathUtils.clamp(-xv * 0.07, -1.1, 1.1); // bank into the turn
   body.rotation.z = Math.sin(t * 2.3) * 0.08;
-  squash = Math.max(0, squash - dt * 2.5);
-  duckAmt = THREE.MathUtils.lerp(duckAmt, duckT > 0 ? 1 : 0, Math.min(1, dt * 18));
-  body.scale.set((1 + squash * 0.5) * (1 - DUCK.narrow * duckAmt), (1 - squash) * (1 - DUCK.flat * duckAmt), 1 + v / 700);
+  if (mode === 'flying') body.scale.set(run.hops.sx, run.hops.sy, run.hops.sz);
+  else body.scale.set(1, 1, 1 + v / 700);
   shadow.position.y = 0.03;
   shadow.scale.setScalar(1 / (1 + (h - hover) * 0.15));
   tilt.getWorldQuaternion(shipQ);
@@ -968,58 +817,17 @@ function frame(now) {
 
   // Speed gates: on straights and gentle sections, a boost once flown through.
   chevrons.offset.y = (chevrons.offset.y + dt * 2.5) % 1;
-  while (flying && nextPadAt < s + AHEAD) {
-    if (inLoop(nextPadAt)) { nextPadAt += 20; continue; }
-    spawnPad(nextPadAt); nextPadAt += between(PAD_GAP.min, PAD_GAP.max);
-  }
-  for (const p of pads) {
-    p.ring.rotation.z += dt * (p.used ? 9 : 1.6);
-    if (flying && !p.used && Math.abs(p.s - s) < 1.2 && Math.abs(x - (p.lane - 1) * LANE_X) < GATE_R && Math.abs(h - HOVER) < GATE_R) {
-      p.used = true; boost = BOOST.kick; shake = Math.max(shake, 0.35);
-      emitRing(tailWorld, 0.6, 7); emitRing(tailWorld, 0.8, 10); burst(12, 6, 10);
-    }
-  }
-  for (const p of pads.filter((p) => s - p.s > BEHIND)) { drop(p.floor); drop(p.spin); }
-  pads = pads.filter((p) => s - p.s <= BEHIND);
+  for (const [, p] of padMeshes) p.ring.rotation.z += dt * (p.used ? 9 : 1.6);
 
   // Air streaks.
   while (v > 0 && nextStreakAt < s + AHEAD * 0.6) { spawnStreak(nextStreakAt); nextStreakAt += 3 + fx() * 6; }
   for (const st of streaks.filter((st) => s - st.s > BEHIND)) drop(st.line);
   streaks = streaks.filter((st) => s - st.s <= BEHIND);
 
-  // Rows: spawn ahead (never inside a loop or corkscrew, closer together the further the run),
-  // collide, flash green when cleared, drop behind. Above a low block or under a bar, the hops passes.
-  while (flying && nextRowAt < s + AHEAD) {
-    if (inLoop(nextRowAt)) { nextRowAt += 20; continue; }
-    spawnRow(nextRowAt);
-    const tighten = Math.max(GAP.floor, 1 - distance / GAP.over);
-    nextRowAt += between(GAP.min, GAP.max) * tighten;
-  }
-  if (pilot.armed && flying) {
-    if (pilot.armed.row.cleared) pilot.armed = null;
-    else if ((pilot.armed.row.s - s) / Math.max(v, 1) <= LEAD[pilot.armed.move]) { steer(pilot.armed.move); pilot.armed = null; }
-  }
-
-  // Collision: touch and you crash, miss and you pass. The hops is an ellipsoid (squashed when it
-  // ducks or lands), each obstacle its own box, posts included; the test is exact.
-  const sq = ship.userData.body.scale, cs = s - (along(0) + along(1)) / 2;
-  const rx = HULL.x * sq.x, ry = HULL.y * sq.y, rz = HULL.z * sq.z;
-  const touches = (u) => {
-    const dz = (Math.max(u.s - u.hd, Math.min(cs, u.s + u.hd)) - cs) / rz;
-    const dx = (Math.max(u.x - u.hw, Math.min(x, u.x + u.hw)) - x) / rx;
-    const dy = (Math.max(u.h - u.hh, Math.min(h, u.h + u.hh)) - h) / ry;
-    return dx * dx + dy * dy + dz * dz < 1;
-  };
-  for (const r of rows) {
-    if (flying && !r.cleared && Math.abs(r.s - cs) < 4) {
-      const hit = r.meshes.find((m) => touches(m.userData));
-      if (hit) crash(r, hit);
-    }
-    if (flying && !r.cleared && cs - r.s > 1.2 + rz) { r.cleared = true; r.flash = 1; charge = Math.min(1, charge + CHARGE.perRow); for (const m of r.meshes) if (m.userData.kind !== 'post') paint(m, GREEN); }
+  // Rows flash green when cleared, then fade back to paper.
+  for (const [, r] of rowMeshes) {
     if (r.flash > 0) { r.flash -= dt * 1.2; if (r.flash <= 0) for (const m of r.meshes) if (m.userData.kind !== 'post') paint(m, PAPER); }
   }
-  for (const r of rows.filter((r) => s - r.s > BEHIND)) for (const m of r.meshes) drop(m);
-  rows = rows.filter((r) => s - r.s <= BEHIND);
 
   // Leaderboard slab: hovers ahead between runs, stays put during one.
   if (!flying) slabS = THREE.MathUtils.lerp(slabS, s + SLAB.ahead, Math.min(1, raw * 2));
@@ -1046,14 +854,14 @@ function frame(now) {
   camera.rotateZ(THREE.MathUtils.clamp(-xv * 0.012, -0.18, 0.18));
   const fov = Math.min(FOV.max, FOV.base + Math.max(0, v - SPEED.start) * FOV.perSpeed + boost * FOV.boost);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = THREE.MathUtils.lerp(camera.fov, fov, Math.min(1, raw * 4)); camera.updateProjectionMatrix(); }
-  ground.position.set(Math.round(f.p.x / 8) * 8, gen.minY - 45, Math.round(f.p.z / 8) * 8);
+  ground.position.set(Math.round(f.p.x / 8) * 8, run.track.minY - 45, Math.round(f.p.z / 8) * 8);
 
   stepDebris(dt);
 
   // Grain, re-seeded every frame.
   grain.style.transform = `translate(${(fx() * 200) | 0}px, ${(fx() * 200) | 0}px)`;
 
-  ui.distance.innerHTML = `${Math.round(distance)}<small>m</small>`;
+  ui.distance.innerHTML = `${Math.round(run.distance)}<small>m</small>`;
   ui.speed.textContent = Math.round(v);
   ui.speedbar.style.width = `${Math.min(100, (v / (SPEED.max + BOOST.kick)) * 100).toFixed(1)}%`;
   ui.speedbar.classList.toggle('full', boost > 1);

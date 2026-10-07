@@ -23,5 +23,6 @@ When `--stream-channel` (default: the channel the game previews) shows no live v
 | Path | Role |
 | --- | --- |
 | `runner.js` | Chromium on the live page, the deciders in turn, the stream, `/health` and `/frame.jpg` |
+| `deciders.js` | The deciders (`semif`, `kumo`, `jev`, `clef`): the request each model gets and its answer as move probabilities; shared with the [arena](../arena) |
 | `start.sh` | App entrypoint: installs Chromium and its libraries on local disk, reads the secrets |
 | `deploy.py` | Uploads the runner to the project and (re)creates the Hopsworks App |

@@ -6,7 +6,7 @@
 set -euo pipefail
 dir=/tmp/hops-run-pilot
 rm -rf "$dir" && mkdir -p "$dir/debs" "$dir/libs" "$dir/apt/lists/partial" "$dir/apt/cache/archives/partial"
-cp package.json package-lock.json runner.js config.json "$dir"/
+cp package.json package-lock.json runner.js deciders.js config.json "$dir"/
 cd "$dir"
 
 export PLAYWRIGHT_BROWSERS_PATH="$dir/browsers" npm_config_cache="$dir/npm"

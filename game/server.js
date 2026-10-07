@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import pg from 'pg';
+import { SPEED, BOOST, PAD_GAP } from './public/sim.js';
 
 // The game version is package.json's: shown in the HUD and stored with every run, so a change to
 // the track or physics never mixes incomparable runs without trace.
@@ -79,14 +80,14 @@ await db.query(`
 // A player's run is timed by the server: at takeoff the page asks for a run key, and the server
 // records when. The run posted with that key may last no longer than the time since its takeoff,
 // and cover no more than the hops can fly in that time: the speed curve, plus a boost gate at
-// most every PHYSICS.gateGap metres (each worth kick^2 / (2 decay) metres), with a margin.
-// Mirrored from public/game.js (SPEED, BOOST, PAD_GAP).
-const PHYSICS = { start: 45, max: 160, gain: 1.6, kick: 45, decay: 18, gateGap: 140, margin: 1.05, clockSlackMs: 3000 };
+// most every PAD_GAP.min metres (each worth kick^2 / (2 decay) metres), with a margin. The
+// constants are the game's own (public/sim.js).
+const PHYSICS = { margin: 1.05, clockSlackMs: 3000 };
 function maxDistance(durationMs) {
-  const P = PHYSICS, t = durationMs / 1000, ramp = (P.max - P.start) / P.gain;
-  const base = t <= ramp ? P.start * t + (P.gain * t * t) / 2 : P.start * ramp + (P.gain * ramp * ramp) / 2 + P.max * (t - ramp);
-  const perGate = P.kick ** 2 / (2 * P.decay);
-  return ((base + perGate) / (1 - perGate / P.gateGap)) * P.margin;
+  const t = durationMs / 1000, ramp = (SPEED.max - SPEED.start) / SPEED.gain;
+  const base = t <= ramp ? SPEED.start * t + (SPEED.gain * t * t) / 2 : SPEED.start * ramp + (SPEED.gain * ramp * ramp) / 2 + SPEED.max * (t - ramp);
+  const perGate = BOOST.kick ** 2 / (2 * BOOST.decay);
+  return ((base + perGate) / (1 - perGate / PAD_GAP.min)) * PHYSICS.margin;
 }
 const NAME = /^[\p{L}\p{N} ._-]{1,20}$/u;
 const SUBMIT = { perMinute: 6 }, STARTS = { perMinute: 30, keepHours: 24 };

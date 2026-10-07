@@ -48,6 +48,8 @@ Two things cost `claude-fable-bot` runs live that the local harness did not show
 
 **As a pilot, through the runner.** Each `pilot.js` sets `window.hopsRunDecide` and answers `{ pilot, model, moves, probabilities, forwardMs }`, the same contract the runner expects from the model pilots. Load it before `game.js` and the game flies it as a pilot, with its runs posted under the pilot's token.
 
+**Headless, in the arena.** `node arena/arena.js --pilots claude-bot,claude-fable-bot --runs 30` flies them on the game's simulation over fixed seeds; see the [arena](../README.md#arena).
+
 **From the browser, as a player.** Open the game, paste `pilot.js` into the console, then paste [`run-in-browser.js`](run-in-browser.js). It reloads the page with the pilot steering and flies run after run; set `NAME`, `BEAT` and `SUBMIT` at the top. Several tabs can fly at once, and they share the best posted so far through localStorage, so only a run that beats every other tab's is posted. Runs go through the public form, timed by the server from each run's key, so they appear as a player's. The live scores above were posted this way, as `manu claude-bot`, `claude-fable-bot` and `manu claude-fablebot` (the form allows 20 characters), so they are labelled as bots on the players' board.
 
 The pilots answer in well under a millisecond.

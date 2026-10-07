@@ -32,7 +32,7 @@ from hopsworks_common.core.project_api import ProjectApi
 from hsml.deployment import Deployment
 
 HERE = pathlib.Path(__file__).resolve().parent
-SOURCES = ["runner.js", "start.sh", "package.json", "package-lock.json"]
+SOURCES = ["runner.js", "deciders.js", "start.sh", "package.json", "package-lock.json"]
 GATEWAY = "http://istio-ingressgateway.hopsworks.svc.cluster.local"
 # Measured in a pod: a GPU renders the game at 1080p and 60 fps, and Chromium, the runner and the
 # stream's ffmpeg then use about 2 cores; SwiftShader on 4 cores manages 640x360 at about 30 fps,

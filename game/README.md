@@ -37,13 +37,21 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 | `POST /api/seat/leave` | `{ id }` frees the seat or the place in line |
 | `GET /health` | `{ status, version, players, waiting, maxPlayers }` when the database answers |
 
-A player's run is timed by the server: it needs a key from `POST /api/runs/start`, may last no longer than the time since that takeoff, and may cover no more than the hops can fly in its duration (the speed curve plus a boost gate at most every 140 m, with a 5% margin; constants mirrored from `public/game.js`). A run is also refused when its name is not 1 to 20 letters, digits, spaces, dots, dashes or underscores. Each client address may take off 30 times and add 6 runs a minute.
+A player's run is timed by the server: it needs a key from `POST /api/runs/start`, may last no longer than the time since that takeoff, and may cover no more than the hops can fly in its duration (the speed curve plus a boost gate at most every 140 m, with a 5% margin; the constants are the game's own, from `public/sim.js`). A run is also refused when its name is not 1 to 20 letters, digits, spaces, dots, dashes or underscores. Each client address may take off 30 times and add 6 runs a minute.
 
 At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and the start screen shows their place in line. A page holds its seat with a heartbeat every 10 s and loses it after 30 s of silence. A seated player idle for 2 minutes gives up the seat when someone is waiting. Seats and queue live in the server process: a restart empties them and pages join again on their next heartbeat. Each client address may hold 8 seats or places in line.
 
 Analytics: Umami (`analytics.hops.io`, website `Hops Run`) records page views and the events `run-start`, `crash` (`distance`), `board-submit` (`distance`, `rank`) and `queue-wait` (`position`).
 
 Every run carries a `pilot` (`player`, `jev`, `qwen`, `kumo`, `clef`) and a `model`, so decision models race on the same board. Players are `player`, marked with a person; a model pilot's first row also shows how many runs it has flown. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, qwen: SemIf, kumo: NVIDIA, clef: Cloudflare). The best player and each model pilot missing from the top runs are listed below them, each with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
+
+## Simulation
+
+`public/sim.js` is the game without its pictures: the track, the rows and speed gates on it, the hops' flight and collisions. The page draws a run from it, the server reads its constants, and the [arena](../arena) flies pilots on it headless.
+
+- Time advances in fixed steps of 1/120 s; the page draws between the last two. A run draws its track, rows and gates from three streams seeded from its seed, so a seed and the same moves at the same steps replay the same run, at any frame rate.
+- No row is impossible. Before a row is placed, a witness flies through it: hopses searched through the same physics, with the moves a model pilot has (a lane change at any time, a jump or duck armed against the next row), each one already past every earlier row. A row no witness passes is drawn again, and moved 10 m further after 12 failed draws. Rows are placed up to 600 m ahead within 4 ms per frame, so the search never stalls a frame.
+- A track maker proposes each row (`procedural` is the game's): one or two lanes taken, kinds and heights within the game's ranges, and the gap to the next row within the range at that distance. The simulation enforces these bounds and the witness, whoever proposes.
 
 ## Model pilots
 
@@ -78,7 +86,8 @@ The game version is `version` in `package.json`, tagged `v<version>` in git. It 
 | Path | Role |
 | --- | --- |
 | `server.js` | Express server: the page with the leaderboard, the leaderboard API, seats, Postgres |
-| `public/game.js` | three.js scene: track generator, hops, thruster, obstacles, speed gates, crash, chase camera, leaderboard form |
+| `public/sim.js` | The simulation: track generator, rows and the witness, speed gates, the hops' physics and collisions |
+| `public/game.js` | three.js scene drawing a run: track, hops, thruster, obstacles, speed gates, crash, chase camera, leaderboard form |
 | `public/fonts/` | Geist and Geist Mono (OFL) |
 | `public/hw.svg` | Hopsworks mark |
 | `public/og.jpg` | Share card image, 1200x630, a capture of the game |

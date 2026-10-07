@@ -92,9 +92,11 @@ A row of obstacles fills one or two of the three lanes, never all three. Half th
 
 And it only gets harder. The hops starts at 45 m/s and gains 1.6 m/s every second up to 160 m/s; speed gates every 140 to 260 m add a 45 m/s burst on top. Rows start 42 to 74 m apart and close in until 2250 m, where they settle at 23 to 41 m.
 
-So there is a ceiling, and it is physical. The fastest lane change the hops can make takes 0.15 s. From 5000 m, at 134 m/s, some rows arrive closer than that, and a wall in your lane right after a lane change cannot be passed by anyone - human or model. Even a perfect pilot (never wrong, zero decision time) has at best even odds of reaching 6300 m, and less than a 1% chance of reaching 8750 m.
+A wall is passed by changing lane, or by a charged jump: the jump charge fills while flying and with every row cleared, and a full one clears a wall.
 
-![Share of runs still flying, against a perfect pilot](docs/survival.png)
+Every row can be passed. Before a row is placed, the game flies a witness through it: hopses searched through the game's own physics, with the moves a model pilot has (a lane change at any time, a jump or duck armed against the next row), each one already past every earlier row. A row no witness gets through is drawn again, and moved further down the track if it keeps failing. A run ends on the pilot, never on the track.
+
+The game runs in fixed steps of 1/120 s and draws each run from a seed, so a seed replays the same track at any frame rate. The simulation is [`game/public/sim.js`](game/public/sim.js), shared by the page, the server and the arena.
 
 ## Results
 
@@ -117,9 +119,29 @@ Neither model was trained on the game. qwen sees no examples at all; kumo sees 7
 
 Every run is a fresh, random track, and that makes for a lot of noise. Kumo flew 4,792 m on its 100th run and crashed at 473 m on the next one: same model, same weights, different track. A single run says very little; a median over a few hundred says something.
 
-The leaderboard ranks best runs, and a best run is mostly a function of how many tries you get. qwen holds the best run on the board, 6,330 m, flown on its 32nd run; it never got near it again in the other 677. kumo's median is twice qwen's, and it made the top 5 four times. One run at 6,330 m is luck doing its job (and about where a perfect pilot's odds halve); four runs past 5,316 m is the model.
+The leaderboard ranks best runs, and a best run is mostly a function of how many tries you get. qwen holds the best run on the board, 6,330 m, flown on its 32nd run; it never got near it again in the other 677. kumo's median is twice qwen's, and it made the top 5 four times. One run at 6,330 m is luck doing its job; four runs past 5,316 m is the model.
 
 Neither model learns between runs.
+
+## Arena
+
+[`arena/arena.js`](arena/arena.js) flies pilots headless on the game's simulation, each over the same seeds, so every pilot meets the same tracks.
+
+```bash
+(cd game && npm ci)
+node arena/arena.js --pilots claude-bot,claude-fable-bot --runs 30
+```
+
+A pilot is a bot from [`bots/`](bots) or a decider (`semif`, `kumo`, `jev`, `clef`, with the settings of [`pilot/`](pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`). It is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once its round trip has passed in run time. The table gives each pilot's median, mean, 90th percentile and best; `--json` gives every run. `--seed` sets the first seed, `--max` caps a run's distance (default 100,000 m).
+
+The two bots over seeds 1 to 30 on game v1.12.0:
+
+| Pilot | Median | Mean | 90th percentile | Best |
+| --- | --- | --- | --- | --- |
+| claude-fable-bot | 6,292 m | 6,114 m | 10,112 m | 11,720 m |
+| claude-bot | 3,543 m | 3,870 m | 7,317 m | 9,317 m |
+
+On the same track, claude-fable-bot flies further on 22 of the 30 seeds. A bot's answer lands after the time it took to compute, so a rerun can differ by a step here and there.
 
 ## Reference
 
@@ -178,6 +200,7 @@ pytest qwen
 | --- | --- |
 | [`game/`](game) | The game: page, server, leaderboard, deploy to `game.hopsworks.ai`. |
 | [`pilot/`](pilot) | Runner flying the live page with the models, as a Hopsworks App. |
+| [`arena/`](arena) | Pilots flown headless on the game's simulation, over the same seeds. |
 | [`qwen/`](qwen) | SemIf predictor, deploy script, environment requirements, integration test. |
 | `qwen/semif/` | SemIf engine, vendored from [SemIf](https://github.com/TheoLeeCJ/SemIf) (MIT). |
 | [`kumo/`](kumo) | Kumo Tabular predictor, deploy script and requirements. |
