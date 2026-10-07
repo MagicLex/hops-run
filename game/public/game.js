@@ -470,15 +470,28 @@ function drawSlab() {
   });
   slabTex.needsUpdate = true;
 }
-// The boards and the track, picked on the start and crash screens: B cycles the boards, T the track.
+// The boards take turns on the slab: each holds for CYCLE.hold seconds, then the slab turns edge-on,
+// shows the next and turns back. B moves on at once. T picks the track on the start and crash
+// screens.
 const boardLists = Object.fromEntries([...document.querySelectorAll('ol.board')].map((ol) => [ol.dataset.board, ol]));
 const boardLabel = document.getElementById('board-label');
-let shownBoard = 'players';
+const CYCLE = { hold: 9, turn: 1.4 }; // seconds
+let shownBoard = 'players', cycleT = 0;
 function showBoard(name) {
   shownBoard = name;
   for (const [n, ol] of Object.entries(boardLists)) ol.hidden = n !== name;
-  for (const b of document.querySelectorAll('#boards button')) b.setAttribute('aria-pressed', String(b.dataset.board === name));
   drawSlab();
+}
+const nextBoard = () => { const names = Object.keys(boardLists); showBoard(names[(names.indexOf(shownBoard) + 1) % names.length]); };
+// The slab's turn this frame: 0 while it holds, out to a quarter turn and back from the other side,
+// the next board shown once it is edge-on.
+function turnSlab(dt) {
+  const before = cycleT;
+  cycleT += dt;
+  if (before < CYCLE.hold + CYCLE.turn / 2 && cycleT >= CYCLE.hold + CYCLE.turn / 2) nextBoard();
+  if (cycleT >= CYCLE.hold + CYCLE.turn) cycleT = 0;
+  const p = Math.max(0, cycleT - CYCLE.hold) / CYCLE.turn;
+  return p === 0 ? 0 : p < 0.5 ? p * Math.PI : (p - 1) * Math.PI;
 }
 function fillBoards(html) {
   for (const [n, h] of Object.entries(html)) boardLists[n].innerHTML = h;
@@ -497,14 +510,13 @@ function setTrack(name) {
   next = newRun();
   refreshBoards();
 }
-for (const b of document.querySelectorAll('#boards button')) b.addEventListener('click', () => showBoard(b.dataset.board));
 for (const b of document.querySelectorAll('#track button')) b.addEventListener('click', () => setTrack(b.dataset.track));
 document.fonts.load('500 48px "Geist Mono"').then(drawSlab, drawSlab);
 for (const ol of Object.values(boardLists)) new MutationObserver(drawSlab).observe(ol, { childList: true, subtree: true, attributes: true });
 document.body.classList.add('in-world'); // the 3D slab now carries the board; the HTML list stays for no-JS and crawlers
 
 // --- state ---------------------------------------------------------------------------------------
-const ui = Object.fromEntries(['distance', 'speed', 'speedbar', 'reticle', 'status', 'prompt', 'charge'].map((id) => [id, document.getElementById(id)]));
+const ui = Object.fromEntries(['distance', 'speed', 'top', 'speedbar', 'reticle', 'status', 'prompt', 'charge'].map((id) => [id, document.getElementById(id)]));
 const grain = document.querySelector('.grain');
 let mode = 'ready'; // ready | flying | crashed
 // What is drawn: while flying, the hops as the run has it, between its last two steps; on the start
@@ -625,6 +637,10 @@ function show(e) {
   } else if (e.type === 'drop') dropRow(e.row.id); else if (e.type === 'unpad') {
     const p = padMeshes.get(e.pad.id);
     if (p) { drop(p.floor); drop(p.spin); padMeshes.delete(e.pad.id); }
+  } else if (e.type === 'top') {
+    // Base speed at its maximum: a burst of rings, and MAX by the speed while it lasts.
+    for (let i = 0; i < 5; i++) emitRing(tailWorld, 0.7 + i * 0.2, 8 + i * 5);
+    burst(24, 10, 12); shake = Math.max(shake, 0.4);
   } else if (e.type === 'crash') crash(e);
 }
 
@@ -637,7 +653,7 @@ addEventListener('keydown', (e) => {
   if (mode !== 'flying') {
     if (e.code === 'Space') { e.preventDefault(); if (seat.state === 'gone') joinSeat(); else start(); }
     if (e.code === 'KeyT') setTrack(track === 'live' ? 'classic' : 'live');
-    if (e.code === 'KeyB') { const names = Object.keys(boardLists); showBoard(names[(names.indexOf(shownBoard) + 1) % names.length]); }
+    if (e.code === 'KeyB') { nextBoard(); cycleT = 0; }
     // After a crash, Enter puts the run on the board: straight away with a saved name, else via the field.
     if (e.code === 'Enter' && lastRun && !submitted && !form.hidden) { e.preventDefault(); if (nameInput.value.trim()) form.requestSubmit(); else nameInput.focus(); }
     return;
@@ -915,7 +931,7 @@ function frame(now) {
   place(slab, slabS, 0, SLAB.lift);
   slabFloat.position.y = Math.sin(t * 1.1) * 0.25;
   slabFloat.rotation.z = Math.sin(t * 0.7) * 0.025;
-  slabFloat.rotation.y = Math.sin(t * 0.5) * 0.04;
+  slabFloat.rotation.y = Math.sin(t * 0.5) * 0.04 + turnSlab(raw);
   place(slabShadow, slabS, 0, 0.03);
   slab.visible = slabShadow.visible = Math.abs(slabS - s) < AHEAD;
 
@@ -946,6 +962,7 @@ function frame(now) {
   ui.speed.textContent = Math.round(v);
   ui.speedbar.style.width = `${Math.min(100, (v / (SPEED.max + BOOST.kick)) * 100).toFixed(1)}%`;
   ui.speedbar.classList.toggle('full', boost > 1);
+  ui.top.hidden = !(mode === 'flying' && run.hops.speed >= SPEED.max);
   ui.reticle.style.setProperty('--bank', `${THREE.MathUtils.radToDeg(tilt.rotation.z) * 0.4}deg`);
   ui.charge.style.width = `${(charge * 100).toFixed(1)}%`;
   ui.charge.classList.toggle('full', charge >= 1);

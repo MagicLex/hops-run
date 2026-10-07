@@ -339,12 +339,14 @@ body.flying .reticle { opacity: 0.5; }
 .board li.gap { display: block; color: var(--dim); text-align: center; padding: 0 12px; line-height: 1.2; }
 .board .pilot a { color: inherit; pointer-events: auto; }
 .board[hidden] { display: none; }
-/* Track and board picks sit at the bottom centre, between the distance and the status. */
+/* The track picks sit at the bottom centre, between the distance and the status. */
 .picks { position: fixed; left: 50%; bottom: var(--m); transform: translateX(-50%); display: grid; gap: 8px; justify-items: center; }
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; pointer-events: auto; }
 .tabs button { font: 500 12px 'Geist Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; padding: 5px 10px; border: 1px solid var(--rule); background: var(--paper); color: var(--dim); cursor: pointer; }
 .tabs button[aria-pressed="true"] { border-color: var(--fg); color: var(--fg); }
 .tabs.track button[aria-pressed="true"] { border-color: var(--green); color: var(--green); }
+#top { color: var(--green); }
+#top[hidden] { display: none; }
 .prompt .links { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .prompt .more { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border: 1px solid var(--green); border-radius: 999px; color: var(--green); background: var(--paper); text-decoration: none; pointer-events: auto; }
 .prompt .more svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
@@ -392,7 +394,7 @@ ${cfg.liveChannel || cfg.liveVideo ? liveCard({ channel: cfg.liveChannel, video:
   <div class="row bottom">
     <div class="stack">
       <div class="metric" id="distance">0<small>m</small></div>
-      <div class="label jump"><span>Speed</span><span class="gauge ticks"><i id="speedbar"></i></span><span><b id="speed">0</b> m/s</span></div>
+      <div class="label jump"><span>Speed</span><span class="gauge ticks"><i id="speedbar"></i></span><span><b id="speed">0</b> m/s<b id="top" hidden> · max</b></span></div>
       <div class="label jump"><span>Jump</span><span class="gauge ticks"><i id="charge"></i></span></div>
     </div>
     <div class="stack right">
@@ -413,16 +415,11 @@ ${cfg.liveChannel || cfg.liveVideo ? liveCard({ channel: cfg.liveChannel, video:
       <button type="submit">Add to board</button>
     </form>
     <div class="label" id="seat" hidden></div>
-    <div class="keys label"><span><b>Space</b> Fly</span><span>Steer ← → · Jump ↑ · Duck ↓</span><span><b>T</b> Track · <b>B</b> Boards</span></div>
+    <div class="keys label"><span><b>Space</b> Fly</span><span>Steer ← → · Jump ↑ · Duck ↓</span><span>${e.live ? '<b>T</b> Track · ' : ''}<b>B</b> Boards</span></div>
     <div class="picks">
     <div class="tabs track" id="track" role="group" aria-label="Track">
       <button type="button" data-track="classic" aria-pressed="${edition.slug === 'classic'}">Classic</button>
       ${e.live ? `<button type="button" data-track="live" aria-pressed="${edition.slug === e.live.slug}" title="${esc(e.live.spec.describe ?? '')}">Live · ${esc(e.live.slug)}</button>` : ''}
-    </div>
-    <div class="tabs" id="boards" role="group" aria-label="Leaderboards">
-      <button type="button" data-board="players" aria-pressed="true">Players</button>
-      <button type="button" data-board="bots" aria-pressed="false">Bots</button>
-      <button type="button" data-board="editions" aria-pressed="false">Editions</button>
     </div>
     </div>
     <div class="label board-label" id="board-label">Leaderboard · ${esc(edition.slug)}</div>

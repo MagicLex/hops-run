@@ -57,9 +57,12 @@ def main():
     target = f"Resources/{args.name}"
     bots = sorted(str(p.relative_to(REPO)) for p in (REPO / "bots").glob("*/pilot.js"))
     for source in SOURCES + bots:
-        folder = f"{target}/{pathlib.PurePosixPath(source).parent}"
-        if not ds.exists(folder):
-            ds.mkdir(folder)
+        # HopsFS makes one folder at a time: each level of the source's path, from the app's own.
+        folder = target
+        for part in ("", *pathlib.PurePosixPath(source).parent.parts):
+            folder = f"{folder}/{part}" if part else folder
+            if not ds.exists(folder):
+                ds.mkdir(folder)
         ds.upload(str(REPO / source), folder, overwrite=True)
     config = {"gameUrl": args.game_url, "semifUrl": semif_url, "tokenSecret": args.token_secret,
               "candidates": args.candidates, "seeds": args.seeds, "band": args.band}
@@ -74,8 +77,8 @@ def main():
         app_kind="CUSTOM",
         entrypoint_command="bash start.sh",
         app_port=8080,
-        memory=2048,
-        cores=2.0,
+        memory=1024,
+        cores=1.0,
         description=f"A new edition of {args.game_url} every day, picked by {args.semif} among candidates the bots fly.",
         readiness_probe_path="/health",
     )

@@ -405,6 +405,7 @@ function steer(b, move, world, events) {
 function move(b, world, events) {
   const dt = DT, zone = zoneAt(world, b), grip = zone?.grip ?? 1;
   b.t += dt;
+  if (b.speed < SPEED.max && b.speed + SPEED.gain * dt >= SPEED.max) events?.push({ type: 'top' });
   b.speed = Math.min(SPEED.max, b.speed + SPEED.gain * dt);
   b.boost = Math.max(0, b.boost - BOOST.decay * dt);
   b.charge = Math.min(1, b.charge + CHARGE.perSecond * dt);
@@ -524,7 +525,8 @@ function witness(frontier, row, world, width) {
 // edition (checked, CLASSIC by default) gives the kinds and zones on top of KINDS and ZONES, and the
 // rows, unless a maker (the arena's) proposes them. The hops is flown by
 // steer() (a key press) or decide() (a pilot's answer: jumps and ducks armed against the next row).
-// What happens in a step (jump, land, lane, gate, clear, crash, a row or gate dropped behind) is
+// What happens in a step (jump, land, lane, gate, clear, top speed reached, crash, a row or gate
+// dropped behind) is
 // pushed to run.events for the page to draw; it empties them. Rows are placed before they come into
 // view: tick() places what the next AHEAD metres need, prepare(ms) places up to PLACE metres ahead
 // within a time budget, so the witness's work is spread over frames. A row is the same whenever it

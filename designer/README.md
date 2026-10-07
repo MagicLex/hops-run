@@ -31,7 +31,7 @@ GAME_URL=http://localhost:8811/ SEMIF_URL=... PILOT_TOKEN=... HOPSWORKS_API_KEY=
 
 ## Deploy
 
-As a Hopsworks App on CPU, next to the pilots and never on their GPU:
+As a Hopsworks App on one CPU core, next to the pilots and never on their GPU:
 
 ```sh
 HOPSWORKS_HOST=10.117.191.130 HOPSWORKS_PROJECT=jevworks HOPSWORKS_API_KEY=... python designer/deploy.py
