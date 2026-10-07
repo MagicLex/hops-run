@@ -205,5 +205,5 @@ pytest qwen
 | `qwen/semif/` | SemIf engine, vendored from [SemIf](https://github.com/TheoLeeCJ/SemIf) (MIT). |
 | [`kumo/`](kumo) | Kumo Tabular predictor, deploy script and requirements. |
 | [`clef/`](clef) | Clef-Flash predictor, deploy script and requirements. |
-| [`bots/`](bots) | Hand-written pilots by Claude models, flown from the browser. |
+| [`bots/`](bots) | Hand-written pilots; [`CONTRIBUTING.md`](CONTRIBUTING.md) says how to submit one. |
 | `docs/` | Screenshot and result charts. |
