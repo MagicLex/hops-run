@@ -2,3 +2,6 @@ __pycache__/
 *.egg-info/
 .venv/
 .pytest_cache/
+node_modules/
+config.json
+.env

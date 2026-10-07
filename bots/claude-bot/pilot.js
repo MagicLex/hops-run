@@ -1,4 +1,4 @@
-// Hops Run pilot "claude": answers jevworksDecide({ lane, airborne, ahead }) like the model pilots.
+// Hops Run pilot "claude": answers hopsRunDecide({ lane, airborne, ahead }) like the model pilots.
 // Searches the next few rows for the cheapest safe plan (a lane at each row, plus a jump or duck where
 // one is needed), using the game's own physics: lane changes follow its lateral spring, jumps its
 // gravity and jump charge (a charged jump clears a wall). Then it flies the plan's first step.
@@ -122,5 +122,5 @@
     };
   }
 
-  window.jevworksDecide = async (input) => decide(input);
+  window.hopsRunDecide = async (input) => decide(input);
 })();

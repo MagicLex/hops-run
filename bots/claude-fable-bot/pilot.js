@@ -1,4 +1,4 @@
-// Hops Run pilot "claude-fable": answers jevworksDecide({ lane, airborne, ahead }) like the model
+// Hops Run pilot "claude-fable": answers hopsRunDecide({ lane, airborne, ahead }) like the model
 // pilots, and only from that: the lane, whether the hops is airborne, and the rows ahead with their
 // distance and contents. Every frame it plans the whole visible stretch (up to 12 rows): the lane
 // at each row, when each lane change starts, where to jump and where to duck, simulating the
@@ -277,5 +277,5 @@
     return answer('hold');
   }
 
-  window.jevworksDecide = async (input) => decide(input);
+  window.hopsRunDecide = async (input) => decide(input);
 })();

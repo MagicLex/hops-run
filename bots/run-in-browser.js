@@ -1,7 +1,7 @@
 // Flies a bot on game.hopsworks.ai from the browser console, through the game's own pilot hook.
 //
 // 1. Open https://game.hopsworks.ai, open the console, paste the bot's pilot.js (it defines
-//    window.jevworksDecide).
+//    window.hopsRunDecide).
 // 2. Paste this file. It reloads the page in place with the pilot steering and flies run after
 //    run. A run that beats BEAT metres, and every best so far, is posted through the public form
 //    as NAME (set SUBMIT to false to only fly). Runs stay on the human path: the server times each
@@ -15,12 +15,12 @@
 // task, so the tabs can stay in the background.
 const NAME = 'manu claude-fablebot', BEAT = 20528, SUBMIT = true;
 
-if (typeof window.jevworksDecide !== 'function') throw new Error('paste the pilot first: window.jevworksDecide is missing');
+if (typeof window.hopsRunDecide !== 'function') throw new Error('paste the pilot first: window.hopsRunDecide is missing');
 if (window.__botTimer) clearInterval(window.__botTimer); // a previous instance in this tab
 const [html, game] = await Promise.all([fetch('/', { cache: 'no-store' }).then((r) => r.text()), fetch('/game.js', { cache: 'no-store' }).then((r) => r.text())]);
 const patches = [
   // the pilot steers, but the run is posted like a player's, not with a pilot token
-  ["const PILOT = typeof window.jevworksDecide === 'function';", "const PILOT = false; const DRIVE = typeof window.jevworksDecide === 'function';"],
+  ["const PILOT = typeof window.hopsRunDecide === 'function';", "const PILOT = false; const DRIVE = typeof window.hopsRunDecide === 'function';"],
   ['const analytics = (event, data) => { if (!PILOT) window.umami?.track(event, data); };', 'const analytics = () => {};'],
   ['    if (PILOT) ask();', '    if (DRIVE) ask();'],
 ];

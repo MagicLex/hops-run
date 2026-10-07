@@ -616,8 +616,8 @@ function reset() {
 }
 
 // A model pilot flies the page when the pilot runner (pilot/runner.js) drives it: the runner exposes
-// jevworksDecide (state in, move probabilities out) and jevworksFinished (posts the run).
-const PILOT = typeof window.jevworksDecide === 'function';
+// hopsRunDecide (state in, move probabilities out) and hopsRunFinished (posts the run).
+const PILOT = typeof window.hopsRunDecide === 'function';
 // Umami custom events, when the page loads the tracker; a model pilot's runs are not visits.
 const analytics = (event, data) => { if (!PILOT) window.umami?.track(event, data); };
 
@@ -824,7 +824,7 @@ async function ask() {
   pilot.asking = true;
   const ahead = rows.filter((r) => r.s > s + 0.8).sort((a, b) => a.s - b.s).map((r) => ({ distance: r.s - s, lanes: r.lanes }));
   try {
-    const d = await window.jevworksDecide({ lane: LANES[lane], airborne, ahead });
+    const d = await window.hopsRunDecide({ lane: LANES[lane], airborne, ahead });
     const best = d.moves[d.probabilities.indexOf(Math.max(...d.probabilities))];
     for (const [move, el] of Object.entries(moveEls)) {
       const i = d.moves.indexOf(move);
@@ -851,7 +851,7 @@ async function finished(run) {
   pilot.restartAt = Infinity;
   result.textContent = 'Posting the run';
   try {
-    const d = await window.jevworksFinished({ ...run, runKey: await run.runKey });
+    const d = await window.hopsRunFinished({ ...run, runKey: await run.runKey });
     if (d.error) throw new Error(d.error);
     boardEl.innerHTML = d.html;
     pilot.record = `run ${d.number} · best ${d.best} m`;

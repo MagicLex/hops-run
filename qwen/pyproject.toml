@@ -3,11 +3,10 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jevworks"
+name = "semif"
 version = "0.1.0"
-description = "Decision models (SemIf, Kumo Tabular, Clef-Flash) served as Hopsworks model deployments"
-readme = "README.md"
-license = {file = "LICENSE"}
+description = "SemIf direct logit readout engine, vendored for the qwen pilot's Hopsworks deployment"
+license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
   "torch>=2.5",
@@ -16,10 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-deploy = ["hopsworks", "pytest"]
+test = ["hopsworks", "pytest"]
 
 [tool.setuptools.packages.find]
-include = ["jevworks*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+include = ["semif*"]

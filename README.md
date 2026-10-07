@@ -1,6 +1,6 @@
-# jevworks
+# Hops Run
 
-Two decision models served on [Hopsworks](https://www.hopsworks.ai), each flying [Hops Run](https://game.hopsworks.ai) live. Every move the hops makes is one call to a Hopsworks model deployment: the game sends the situation, the model answers with a probability per move, in about 30 ms.
+[Hops Run](https://game.hopsworks.ai), a low-poly racer, and the decision models served on [Hopsworks](https://www.hopsworks.ai) that fly it live. Every move the hops makes is one call to a Hopsworks model deployment: the game sends the situation, the model answers with a probability per move, in about 30 ms.
 
 ![A pilot in Hops Run, 1690 m into a run](docs/hops-run.jpg)
 
@@ -168,17 +168,19 @@ Rows need `id`, `state` (string, object or array), `question`, and 2 to 16 `opti
 ### SemIf integration test
 
 ```bash
-pip install -e '.[deploy]'
-pytest
+pip install -e 'qwen[test]'
+pytest qwen
 ```
 
 ## Layout
 
 | Path | Role |
 | --- | --- |
-| `qwen/` | SemIf predictor, deploy script and environment requirements. |
-| `jevworks/semif/` | SemIf engine, vendored from [SemIf](https://github.com/TheoLeeCJ/SemIf) (MIT). |
-| `kumo/` | Kumo Tabular predictor, deploy script and requirements. |
-| `clef/` | Clef-Flash predictor, deploy script and requirements. |
-| `tests/test_decide.py` | Integration test against the `semif4b` deployment. |
+| [`game/`](game) | The game: page, server, leaderboard, deploy to `game.hopsworks.ai`. |
+| [`pilot/`](pilot) | Runner flying the live page with the models, as a Hopsworks App. |
+| [`qwen/`](qwen) | SemIf predictor, deploy script, environment requirements, integration test. |
+| `qwen/semif/` | SemIf engine, vendored from [SemIf](https://github.com/TheoLeeCJ/SemIf) (MIT). |
+| [`kumo/`](kumo) | Kumo Tabular predictor, deploy script and requirements. |
+| [`clef/`](clef) | Clef-Flash predictor, deploy script and requirements. |
+| [`bots/`](bots) | Hand-written pilots by Claude models, flown from the browser. |
 | `docs/` | Screenshot and result charts. |

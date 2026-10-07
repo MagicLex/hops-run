@@ -1,7 +1,7 @@
 """Integration test against the live SemIf deployment.
 
 Requires HOPSWORKS_HOST, HOPSWORKS_API_KEY and HOPSWORKS_PROJECT in the
-environment. JEVWORKS_DEPLOYMENT overrides the deployment name (default semif4b).
+environment. SEMIF_DEPLOYMENT overrides the deployment name (default semif4b).
 """
 
 import math
@@ -41,7 +41,7 @@ EXPECTED = {"locked-out": "account-access", "refund": "billing"}
 @pytest.fixture(scope="module")
 def deployment():
     project = hopsworks.login()
-    name = os.environ.get("JEVWORKS_DEPLOYMENT", "semif4b")
+    name = os.environ.get("SEMIF_DEPLOYMENT", "semif4b")
     dep = project.get_model_serving().get_deployment(name)
     assert dep is not None, f"deployment {name} not found"
     assert dep.get_state().status == "Running", f"deployment {name} is {dep.get_state().status}"

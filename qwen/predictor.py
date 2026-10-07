@@ -12,8 +12,8 @@ import os
 
 import torch
 
-from jevworks.semif.core import load_causal_model, resolve_device
-from jevworks.semif.direct import score
+from semif.core import load_causal_model, resolve_device
+from semif.direct import score
 
 
 class Predictor:

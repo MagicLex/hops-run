@@ -7,11 +7,11 @@ Two Hops Run pilots written by Claude models, each of which took first place on 
 | `claude-bot` | Claude Opus 5.5 | 12,381 m (5 live runs) | [`claude-bot/`](claude-bot) |
 | `claude-fable-bot` | Claude Fable 5.1 | 30,400 m (49 live runs) | [`claude-fable-bot/`](claude-fable-bot) |
 
-Both are hand-written planners, not model inference: each Claude read `game.js`, worked out the physics, and wrote a decision function. They answer the same request the `qwen` and `kumo` pilots get, `jevworksDecide({ lane, airborne, ahead })`, and use nothing else from the game. So they are a different kind of entry from the models in this repo: a model that is told the rules in English against a program that knows the physics.
+Both are hand-written planners, not model inference: each Claude read `game.js`, worked out the physics, and wrote a decision function. They answer the same request the `qwen` and `kumo` pilots get, `hopsRunDecide({ lane, airborne, ahead })`, and use nothing else from the game. So they are a different kind of entry from the models in this repo: a model that is told the rules in English against a program that knows the physics.
 
 ## How they decide
 
-The game calls `jevworksDecide` every frame with the lane, whether the hops is airborne, and the rows ahead with their distance and what each lane holds. The pilot answers with a probability per move (`left`, `right`, `hold`, `up`, `down`); the game flies the most likely one, arming jumps and ducks against the next row.
+The game calls `hopsRunDecide` every frame with the lane, whether the hops is airborne, and the rows ahead with their distance and what each lane holds. The pilot answers with a probability per move (`left`, `right`, `hold`, `up`, `down`); the game flies the most likely one, arming jumps and ducks against the next row.
 
 **`claude-bot`** estimates speed from how fast the nearest row closes, then searches the next 5 rows for the cheapest surviving sequence of lanes, jumps and ducks. It knows that jump height depends on the jump charge (which fills over time and with each row cleared), so a charged jump clears a wall, which the model pilots are told is impossible. It flies the first step of the best plan and re-plans next frame.
 
@@ -46,7 +46,7 @@ Two things cost `claude-fable-bot` runs live that the local harness did not show
 
 ## Running them
 
-**As a pilot, through the runner.** Each `pilot.js` sets `window.jevworksDecide` and answers `{ pilot, model, moves, probabilities, forwardMs }`, the same contract the runner expects from the model pilots. Load it before `game.js` and the game flies it as a pilot, with its runs posted under the pilot's token.
+**As a pilot, through the runner.** Each `pilot.js` sets `window.hopsRunDecide` and answers `{ pilot, model, moves, probabilities, forwardMs }`, the same contract the runner expects from the model pilots. Load it before `game.js` and the game flies it as a pilot, with its runs posted under the pilot's token.
 
 **From the browser, as a player.** Open the game, paste `pilot.js` into the console, then paste [`run-in-browser.js`](run-in-browser.js). It reloads the page with the pilot steering and flies run after run; set `NAME`, `BEAT` and `SUBMIT` at the top. Several tabs can fly at once, and they share the best posted so far through localStorage, so only a run that beats every other tab's is posted. Runs go through the public form, timed by the server from each run's key, so they appear as a player's. The live scores above were posted this way, as `manu claude-bot`, `claude-fable-bot` and `manu claude-fablebot` (the form allows 20 characters), so they are labelled as bots on the players' board.
 

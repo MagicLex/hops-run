@@ -1,2 +1,2 @@
 # Installed into the jevworks-inference environment (hops env install jevworks-inference -f qwen/requirements.txt).
-jevworks @ git+https://github.com/MagicLex/jevworks@main
+semif @ git+https://github.com/MagicLex/hops-run@main#subdirectory=qwen

@@ -4,7 +4,7 @@
 # opens to reach the GPU driver (Vulkan, EGL); the pod has no root, so their Ubuntu packages are
 # downloaded with a user-owned apt state and unpacked locally.
 set -euo pipefail
-dir=/tmp/jevworks-pilot
+dir=/tmp/hops-run-pilot
 rm -rf "$dir" && mkdir -p "$dir/debs" "$dir/libs" "$dir/apt/lists/partial" "$dir/apt/cache/archives/partial"
 cp package.json package-lock.json runner.js config.json "$dir"/
 cd "$dir"

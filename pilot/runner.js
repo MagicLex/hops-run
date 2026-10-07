@@ -9,8 +9,8 @@
 //   DECIDER       the rotation, comma-separated: semif (pilot qwen, the default), jev (pilot jev),
 //                 kumo (pilot kumo), clef (pilot clef); e.g. semif,kumo,jev
 //   SEMIF_URL     path-routed predict URL of the semif deployment, for semif
-//   KUMO_URL      path-routed predict URL of the Kumo Tabular deployment (MagicLex/jevworks kumo/), for kumo
-//   CLEF_URL      path-routed predict URL of the Clef-Flash deployment (MagicLex/jevworks clef/), for clef
+//   KUMO_URL      path-routed predict URL of the Kumo Tabular deployment (kumo/ in this repo), for kumo
+//   CLEF_URL      path-routed predict URL of the Clef-Flash deployment (clef/ in this repo), for clef
 //   JEV_URL       TypeSafe System One endpoint, e.g. https://api.typesafe.ai/v1/systemone, for jev
 //   JEV_MODEL     TypeSafe model, e.g. jev-latest, for jev
 //   TYPESAFE_API_KEY  TypeSafe API key, for jev
@@ -111,7 +111,7 @@ async function decideServed(name, url, input) {
 }
 
 // Jev and Clef answer the same decision as one SystemOne Choice question: the options are the
-// criteria. Jev is TypeSafe's API; Clef is a Hopsworks deployment (MagicLex/jevworks clef/) answering the same
+// criteria. Jev is TypeSafe's API; Clef is a Hopsworks deployment (clef/ in this repo) answering the same
 // request body, with its forward time. Jev reports none, so its round trip stands in.
 function choiceRequest(state, model) {
   const { state: text, question, options } = row(state);
@@ -269,8 +269,8 @@ async function fly() {
     const page = current = await browser.newPage({ viewport: { width, height } });
     page.on('pageerror', (e) => console.error(`page error: ${e.message}`));
     await page.addInitScript(() => { try { localStorage.setItem('umami.disabled', '1'); } catch { /* storage blocked */ } });
-    await page.exposeFunction('jevworksDecide', decide);
-    await page.exposeFunction('jevworksFinished', finished);
+    await page.exposeFunction('hopsRunDecide', decide);
+    await page.exposeFunction('hopsRunFinished', finished);
     const closed = new Promise((resolve) => { page.on('crash', resolve); page.on('close', resolve); browser.on('disconnected', resolve); });
     for (;;) {
       stats.version = await gameVersion();
