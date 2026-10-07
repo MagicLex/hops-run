@@ -132,7 +132,7 @@ Neither model learns between runs.
 node arena/arena.js --pilots claude-bot,claude-fable-bot --runs 30
 ```
 
-A pilot is a bot from [`bots/`](bots) or a decider (`semif`, `kumo`, `jev`, `clef`, with the settings of [`pilot/`](pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`). It is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once its round trip has passed in run time. The table gives each pilot's median, mean, 90th percentile and best; `--json` gives every run. `--seed` sets the first seed, `--max` caps a run's distance (default 100,000 m).
+A pilot is a bot from [`bots/`](bots) or a decider (`semif`, `kumo`, `jev`, `clef`, with the settings of [`pilot/`](pilot): `SEMIF_URL`, `KUMO_URL`, `CLEF_URL`, `JEV_URL`, `JEV_MODEL`, `TYPESAFE_API_KEY`, `HOPSWORKS_API_KEY`). It is asked as the page asks it, at most once per 60 Hz frame, and its answer lands once its round trip has passed in run time. The table gives each pilot's median, mean, 90th percentile and best; `--json` gives every run. `--maker` picks the track maker: the game's `procedural`, or one from [`arena/makers/`](arena/makers), which can bring obstacle kinds and zones of its own: moving walls, falling bars, stretches of low gravity or swapped controls, all held to the game's bounds and passable by construction. [`arena/README.md`](arena/README.md) is the reference for writing one.
 
 The two bots over seeds 1 to 30 on game v1.12.0:
 

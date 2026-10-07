@@ -17,17 +17,20 @@ export const DECIDERS = {
 const LANES = ['left', 'centre', 'right'];
 const HAS = { wall: 'a wall', low: 'a low block', bar: 'a bar', undefined: 'nothing, it is open' };
 const RULES = 'The hops crashes if it hits a wall: jumping or ducking never clears a wall, only moving to another lane does. Jumping clears a low block or a bar. Ducking clears a bar. Flying straight is only safe in an open lane.';
-function row({ lane, airborne, ahead }) {
-  const next = ahead[0], i = LANES.indexOf(lane), lanes = next?.lanes ?? {}, here = HAS[lanes[lane]];
+// Kinds and zones beyond the three are named by what the game describes them as.
+function row({ lane, airborne, zone, ahead, describe = {} }) {
+  const next = ahead[0], i = LANES.indexOf(lane), lanes = next?.lanes ?? {};
+  const has = (kind) => (kind ? HAS[kind] ?? describe[kind] ?? kind : HAS.undefined), here = has(lanes[lane]);
   const options = [];
   for (const [id, j] of [['left', i - 1], ['right', i + 1]]) {
-    if (j >= 0 && j < 3) options.push({ id, description: `Move to the ${LANES[j]} lane, which has ${HAS[lanes[LANES[j]]]}` });
+    if (j >= 0 && j < 3) options.push({ id, description: `Move to the ${LANES[j]} lane, which has ${has(lanes[LANES[j]])}` });
   }
   options.push({ id: 'hold', description: `Stay in the ${lane} lane, which has ${here}, and fly straight` });
   if (!airborne) options.push({ id: 'up', description: `Stay in the ${lane} lane, which has ${here}, and jump` });
   options.push({ id: 'down', description: `Stay in the ${lane} lane, which has ${here}, and duck` });
-  const where = next ? `The next row of obstacles is ${Math.round(next.distance)} m ahead.` : 'There are no obstacles ahead.';
-  return { id: 'hops', state: `${RULES} The hops is in the ${lane} lane${airborne ? ', in the air' : ''}. ${where}`, question: 'What should the hops do?', options };
+  const where = next ? `The next row of obstacles is ${Math.round(next.distance)} m ahead${next.zone && next.zone !== zone ? `, in ${describe[next.zone]}` : ''}.` : 'There are no obstacles ahead.';
+  const inZone = zone ? ` The hops is in ${describe[zone]}.` : '';
+  return { id: 'hops', state: `${RULES} The hops is in the ${lane} lane${airborne ? ', in the air' : ''}.${inZone} ${where}`, question: 'What should the hops do?', options };
 }
 
 // cfg: { semifUrl, kumoUrl, clefUrl, jevUrl, jevModel, jevKey, apiKey, jwt } as each decider needs.

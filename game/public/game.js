@@ -8,7 +8,7 @@
 // track, the rows and gates, the hops' flight) is sim.js; this file draws it.
 
 import * as THREE from 'three';
-import { createRun, LANE_X, TRACK_W, AHEAD, BEHIND, SPEED, BOOST, SPRING, STEP, HOVER, GRAVITY, SHIP, GATE_R, START, DT } from './sim.js';
+import { createRun, boxAt, LANE_X, TRACK_W, AHEAD, BEHIND, SPEED, BOOST, SPRING, STEP, HOVER, GRAVITY, SHIP, GATE_R, START, DT } from './sim.js';
 
 const P = { bg: 0xf1efea, ink: 0x151513, dim: 0x8a867d };
 const PAPER = { top: 0xfcfbf8, side: 0xeae7e0, end: 0xd9d5cc };
@@ -175,11 +175,49 @@ function showPad(pad) {
   padMeshes.set(pad.id, { floor, ring, spin, used: false });
 }
 
-// --- obstacles: a row's boxes as paper blocks ---------------------------------------------------
-const rowMeshes = new Map(); // row id -> { meshes (one per box), flash }
+// --- obstacles: a row's parts as paper blocks, its zone as a tint on the track -------------------
+// A moving part is placed each frame where it stands for the hops (sim.js boxAt).
+const rowMeshes = new Map(); // row id -> { row, meshes (one per part), zone, flash }
+const ZONE_TINT = { ink: P.ink, green: GREEN.top, rust: RUST.top };
+const zoneMats = {};
+function showZone({ s: rs, zone: { before, after, tint } }) {
+  const pos = [];
+  for (let zs = rs - before; zs < rs + after; zs += STEP) {
+    const a = at(zs, -HX, 0.04), b = at(zs, HX, 0.04), c = at(zs + STEP, HX, 0.04), d = at(zs + STEP, -HX, 0.04);
+    for (const v of [a, b, c, a, c, d]) pos.push(v.x, v.y, v.z);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  zoneMats[tint] ??= new THREE.MeshBasicMaterial({ color: ZONE_TINT[tint], transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(g, zoneMats[tint]);
+  scene.add(mesh);
+  return mesh;
+}
 function showRow(row) {
-  const meshes = row.boxes.map((u) => { const m = place(block(u.hw * 2, u.hh * 2, u.hd * 2), u.s, u.x, u.h); m.userData = u; scene.add(m); return m; });
-  rowMeshes.set(row.id, { meshes, flash: 0 });
+  const meshes = row.parts.map((part) => {
+    const u = boxAt(part, row.s - s), m = place(block(u.hw * 2, u.hh * 2, u.hd * 2), u.s, u.x, u.h);
+    m.userData = { post: part.post, ...u };
+    scene.add(m);
+    return m;
+  });
+  rowMeshes.set(row.id, { row, meshes, zone: row.zone && showZone(row), flash: 0 });
+}
+function moveParts() {
+  for (const [, { row, meshes }] of rowMeshes) {
+    row.parts.forEach((part, i) => {
+      if (!part.path) return;
+      const u = boxAt(part, row.s - s);
+      place(meshes[i], u.s, u.x, u.h);
+      Object.assign(meshes[i].userData, u);
+    });
+  }
+}
+function dropRow(id) {
+  const r = rowMeshes.get(id);
+  if (!r) return;
+  for (const m of r.meshes) drop(m);
+  if (r.zone) drop(r.zone);
+  rowMeshes.delete(id);
 }
 
 // --- the hops: the Hopsworks mark in low poly ------------------------------------------------------
@@ -439,10 +477,11 @@ let s = START, x = 0, xv = 0, h = HOVER, hv = 0, v = 0, boost = 0, charge = 0, a
 let crashV = 0, timeScale = 1, camX = 0, camH = 0, shake = 0, acc = 0;
 const prev = { s: START, x: 0, h: HOVER };
 const PREPARE_MS = 4; // per frame, placing rows ahead
+let shownZone = null; // the zone named in the status
 const lerp = THREE.MathUtils.lerp;
 
 function resetScene() {
-  for (const [, r] of rowMeshes) for (const m of r.meshes) drop(m);
+  for (const id of [...rowMeshes.keys()]) dropRow(id);
   for (const [, p] of padMeshes) { drop(p.floor); drop(p.spin); }
   for (const st of streaks) drop(st.line);
   for (const [, g] of chunks) drop(g);
@@ -493,17 +532,17 @@ function start() {
   lastRun = null; submitted = false;
   runKey = takeoff();
   ui.prompt.hidden = true; form.hidden = true; result.hidden = true;
-  ui.status.textContent = 'Flying'; ui.status.className = 'label flying';
+  ui.status.textContent = 'Flying'; ui.status.className = 'label flying'; shownZone = null;
 }
 
-function crash({ row, box }) {
+function crash({ row, part }) {
   mode = 'crashed';
   document.body.classList.remove('flying');
   ({ s, x, h } = run.hops);
   crashV = v; timeScale = 0.25;
   const { meshes } = rowMeshes.get(row.id);
-  for (const m of meshes) if (m.userData.kind !== 'post') paint(m, RUST);
-  shatterBlock(meshes[row.boxes.indexOf(box)], crashV);
+  for (const m of meshes) if (!m.userData.post) paint(m, RUST);
+  shatterBlock(meshes[part], crashV);
   shatterShip(crashV);
   shake = 1.6;
   for (let i = 0; i < 4; i++) emitRing(tailWorld, 0.6 + i * 0.25, 8 + i * 6);
@@ -546,11 +585,8 @@ function show(e) {
     emitRing(tailWorld, 0.6, 7); emitRing(tailWorld, 0.8, 10); burst(12, 6, 10);
   } else if (e.type === 'clear') {
     const r = rowMeshes.get(e.row.id);
-    if (r) { r.flash = 1; for (const m of r.meshes) if (m.userData.kind !== 'post') paint(m, GREEN); }
-  } else if (e.type === 'drop') {
-    for (const m of rowMeshes.get(e.row.id)?.meshes ?? []) drop(m);
-    rowMeshes.delete(e.row.id);
-  } else if (e.type === 'unpad') {
+    if (r) { r.flash = 1; for (const m of r.meshes) if (!m.userData.post) paint(m, GREEN); }
+  } else if (e.type === 'drop') dropRow(e.row.id); else if (e.type === 'unpad') {
     const p = padMeshes.get(e.pad.id);
     if (p) { drop(p.floor); drop(p.spin); padMeshes.delete(e.pad.id); }
   } else if (e.type === 'crash') crash(e);
@@ -765,6 +801,11 @@ function frame(now) {
     }
   }
   syncTrack(s);
+  moveParts();
+  if (mode === 'flying') {
+    const zone = run.zone()?.name ?? null;
+    if (zone !== shownZone) { shownZone = zone; ui.status.textContent = zone ? `Flying · ${zone}` : 'Flying'; }
+  }
 
   const f = frameAt(s);
   ship.position.copy(f.p).addScaledVector(f.right, x);
@@ -826,7 +867,7 @@ function frame(now) {
 
   // Rows flash green when cleared, then fade back to paper.
   for (const [, r] of rowMeshes) {
-    if (r.flash > 0) { r.flash -= dt * 1.2; if (r.flash <= 0) for (const m of r.meshes) if (m.userData.kind !== 'post') paint(m, PAPER); }
+    if (r.flash > 0) { r.flash -= dt * 1.2; if (r.flash <= 0) for (const m of r.meshes) if (!m.userData.post) paint(m, PAPER); }
   }
 
   // Leaderboard slab: hovers ahead between runs, stays put during one.

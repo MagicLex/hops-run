@@ -38,9 +38,6 @@ export const HULL = { x: 1.0, y: 1.0, z: 1.5 };
 // The hops' body: length along the track, radius, and the share of its length ahead of its origin.
 export const SHIP = { length: 3.0, radius: 1.0, nose: 0.42 };
 const CENTRE = SHIP.length * (0.5 - SHIP.nose); // origin to body centre, backwards
-// Obstacle kinds: a wall is dodged sideways (or cleared by a charged jump), a low block jumped, a
-// bar ducked under or jumped.
-export const KIND = { wall: { p: 0.5, h: [4.6, 5.6] }, low: { p: 0.25, h: [0.9, 1.1] }, bar: { p: 0.25, bottom: 1.7, t: 0.6 } };
 export const GATE_R = 1.7; // speed gate ring radius, centred at hover height
 export const START = 22; // metres along the track where a run takes off
 // A pilot's jump or duck is armed against the next row and fires this many seconds before it.
@@ -182,47 +179,137 @@ function createTrack(rng) {
   };
 }
 
+// --- obstacles and zones -------------------------------------------------------------------------
+// An obstacle kind is data: boxes (parts) set in the lane it stands in. A part has w, h, d in metres
+// (h may be 'height': the row's own, within the kind's `height` range), x (metres across from the
+// lane's centre), lift (metres from the track to its bottom), post (a thin support), and may move
+// along a path [{ at, lane, lift }]: where it is when the hops is `at` metres from the row, `lane`
+// lanes across from where it stands, its bottom at `lift`, in between eased linearly. Each hops,
+// the pilot's or one the witness flies, sees a part move with its own approach. `describe` is what
+// a pilot is told it is.
+const BAR = { w: LANE_X - 0.1, t: 0.6, bottom: 1.7 };
+const posts = [-1, 1].map((side) => ({ w: 0.16, h: BAR.bottom, d: 0.16, x: side * (BAR.w / 2 - 0.08), post: true }));
+export const KINDS = {
+  wall: { describe: 'a wall', height: [4.6, 5.6], parts: [{ w: LANE_X - 0.4, h: 'height', d: 1.6 }] },
+  low: { describe: 'a low block', height: [0.9, 1.1], parts: [{ w: LANE_X - 0.4, h: 'height', d: 2.2 }] },
+  // Full lane wide on thin posts at the lane edges, so a ducking hops squeezes through.
+  bar: { describe: 'a bar', parts: [...posts, { w: BAR.w, h: BAR.t, d: 1.0, lift: BAR.bottom }] },
+  sweeper: { describe: 'a wall that slides two lanes to the right while the hops comes from 80 m to 20 m away', parts: [{ w: LANE_X - 0.4, h: 4.6, d: 1.6, path: [{ at: 80, lane: 0 }, { at: 20, lane: 2 }] }] },
+  dropbar: { describe: 'a bar that falls from overhead onto its posts while the hops comes from 50 m to 15 m away', parts: [...posts, { w: BAR.w, h: BAR.t, d: 1.0, lift: BAR.bottom, path: [{ at: 50, lift: 4.4 }, { at: 15, lift: BAR.bottom }] }] },
+};
+// A zone changes how the hops flies from `before` metres ahead of its row to `after` metres past
+// it: gravity and grip (the lateral spring) scaled, or left and right swapped. `tint` is the colour
+// the page lays on that stretch of track.
+export const ZONES = {
+  drift: { describe: 'a drift zone: lane changes are slow and sway', grip: 0.45, before: 80, after: 10, tint: 'ink' },
+  float: { describe: 'a float zone: gravity is halved, so jumps fly higher and longer', gravity: 0.5, before: 80, after: 10, tint: 'green' },
+  mirror: { describe: 'a mirror zone: left moves the hops right and right moves it left', mirror: true, before: 80, after: 10, tint: 'rust' },
+};
+// What a kind or a zone may be: sizes, lift and path within these, at most `path` points, scales
+// within `scale`. Whatever passes still has to get past the witness.
+const BOUNDS = { w: [0.1, LANE_X - 0.1], h: [0.1, 6], d: [0.1, 3], lift: [0, 5], at: [0, AHEAD], lane: [-2, 2], path: 4, scale: [0.4, 1.6], before: [0, 120], after: [0, 40] };
+const ZONE_REACH = BOUNDS.before[1];
+
+const within = (v, [lo, hi]) => typeof v === 'number' && v >= lo && v <= hi;
+export function checkKind(name, k) {
+  const bad = (why) => { throw new Error(`kind ${name}: ${why}`); };
+  if (typeof k?.describe !== 'string' || !k.describe) bad('describe it for the pilots');
+  if (k.height && !(within(k.height[0], BOUNDS.h) && within(k.height[1], BOUNDS.h) && k.height[0] <= k.height[1])) bad(`height within ${BOUNDS.h}`);
+  if (!Array.isArray(k.parts) || !k.parts.length) bad('at least one part');
+  for (const p of k.parts) {
+    if (p.h === 'height' ? !k.height : !within(p.h, BOUNDS.h)) bad(`part h within ${BOUNDS.h}, or 'height' with a height range`);
+    for (const dim of ['w', 'd']) if (!within(p[dim], BOUNDS[dim])) bad(`part ${dim} within ${BOUNDS[dim]}`);
+    if (p.lift !== undefined && !within(p.lift, BOUNDS.lift)) bad(`part lift within ${BOUNDS.lift}`);
+    if (p.x !== undefined && !within(p.x, [-LANE_X / 2, LANE_X / 2])) bad('part x within its lane');
+    if (p.path !== undefined) {
+      if (!Array.isArray(p.path) || p.path.length < 2 || p.path.length > BOUNDS.path) bad(`a path of 2 to ${BOUNDS.path} points`);
+      for (const q of p.path) {
+        if (!within(q.at, BOUNDS.at)) bad(`path at within ${BOUNDS.at}`);
+        if (q.lane !== undefined && !within(q.lane, BOUNDS.lane)) bad(`path lane within ${BOUNDS.lane}`);
+        if (q.lift !== undefined && !within(q.lift, BOUNDS.lift)) bad(`path lift within ${BOUNDS.lift}`);
+      }
+    }
+  }
+}
+export function checkZone(name, z) {
+  const bad = (why) => { throw new Error(`zone ${name}: ${why}`); };
+  if (typeof z?.describe !== 'string' || !z.describe) bad('describe it for the pilots');
+  for (const k of ['gravity', 'grip']) if (z[k] !== undefined && !within(z[k], BOUNDS.scale)) bad(`${k} within ${BOUNDS.scale}`);
+  if (z.mirror !== undefined && typeof z.mirror !== 'boolean') bad('mirror is true or false');
+  for (const k of ['before', 'after']) if (!within(z[k], BOUNDS[k])) bad(`${k} within ${BOUNDS[k]}`);
+}
+for (const [name, k] of Object.entries(KINDS)) checkKind(name, k);
+for (const [name, z] of Object.entries(ZONES)) checkZone(name, z);
+
+// A row's parts, ready to collide: the box where each stands (centre s, x, lift; half sizes), and
+// its path in metres across.
+function partsOf(s, lanes, kinds) {
+  const out = [];
+  for (const [l, { kind, height }] of Object.entries(lanes)) {
+    const lx = (LANES.indexOf(l) - 1) * LANE_X;
+    for (const p of kinds[kind].parts) {
+      const hh = (p.h === 'height' ? height : p.h) / 2, lift = p.lift ?? 0;
+      const path = p.path?.map((q) => ({ at: q.at, dx: (q.lane ?? 0) * LANE_X, lift: q.lift ?? lift })).sort((a, b) => b.at - a.at);
+      out.push({ kind, post: !!p.post, s, x: lx + (p.x ?? 0), lift, hw: p.w / 2, hh, hd: p.d / 2, path });
+    }
+  }
+  return out;
+}
+// A part's box for a hops `d` metres from its row: centre (s, x, h) and half sizes.
+export function boxAt(p, d) {
+  if (!p.path) return p.box ??= { s: p.s, x: p.x, h: p.lift + p.hh, hw: p.hw, hh: p.hh, hd: p.hd };
+  // The path runs from its farthest point (q[0]) to its nearest; before and after it, the part rests.
+  const q = p.path, i = q.findIndex((r) => r.at <= d);
+  const [a, c] = i === 0 ? [q[0], q[0]] : i === -1 ? [q.at(-1), q.at(-1)] : [q[i - 1], q[i]];
+  const u = a === c ? 0 : (a.at - d) / (a.at - c.at), lift = lerp(a.lift, c.lift, u);
+  return { s: p.s, x: p.x + lerp(a.dx, c.dx, u), h: lift + p.hh, hw: p.hw, hh: p.hh, hd: p.hd };
+}
+
 // --- rows ----------------------------------------------------------------------------------------
-// A track maker proposes each row: { lanes: { [lane]: { kind, h } }, gap }, one or two lanes taken,
-// kinds and heights within KIND, and gap (metres to the next row) within GAP scaled by `tighten`.
-// It gets the row stream, where the row goes and how tight rows are there, and the run so far.
+// A track maker proposes each row: { lanes: { [lane]: { kind, height } }, zone, gap }: one or two
+// lanes taken, kinds from the run's kinds (height within the kind's range, where it has one), every
+// part on the track wherever its path takes it, a zone or none, and gap (metres to the next row)
+// within GAP scaled by `tighten`. It gets the row stream, where the row goes, how tight rows are
+// there, and the run so far.
+const MIX = { wall: 0.5, low: 0.25, bar: 0.25 };
 export function procedural({ rng, tighten }) {
   // One or two lanes hold an obstacle, never all three.
   const taken = [...LANES].sort(() => rng() - 0.5).slice(0, rng() < 0.45 ? 2 : 1);
   const lanes = {};
   for (const l of taken) {
-    const roll = rng(), kind = roll < KIND.wall.p ? 'wall' : roll < KIND.wall.p + KIND.low.p ? 'low' : 'bar';
-    lanes[l] = { kind, h: kind === 'bar' ? KIND.bar.bottom : between(rng, ...KIND[kind].h) };
+    const roll = rng(), kind = roll < MIX.wall ? 'wall' : roll < MIX.wall + MIX.low ? 'low' : 'bar';
+    lanes[l] = { kind, height: KINDS[kind].height && between(rng, ...KINDS[kind].height) };
   }
   return { lanes, gap: between(rng, GAP.min, GAP.max) * tighten };
 }
 
-function checkProposal({ lanes, gap }, tighten) {
+function checkProposal({ lanes, zone, gap }, tighten, kinds, zones) {
   const taken = Object.keys(lanes ?? {});
   if (taken.length < 1 || taken.length > 2 || taken.some((l) => !LANES.includes(l))) throw new Error(`row: one or two of ${LANES.join(', ')}`);
-  for (const [l, { kind, h }] of Object.entries(lanes)) {
-    if (!KIND[kind]) throw new Error(`row: ${l} holds ${kind}, not one of ${Object.keys(KIND).join(', ')}`);
-    if (kind !== 'bar' && !(h >= KIND[kind].h[0] && h <= KIND[kind].h[1])) throw new Error(`row: ${kind} height ${h} outside ${KIND[kind].h}`);
+  for (const [l, { kind, height }] of Object.entries(lanes)) {
+    const k = kinds[kind];
+    if (!k) throw new Error(`row: ${l} holds ${kind}, not one of ${Object.keys(kinds).join(', ')}`);
+    if (k.height && !within(height, k.height)) throw new Error(`row: ${kind} height ${height} outside ${k.height}`);
   }
+  for (const p of partsOf(0, lanes, kinds)) {
+    for (const q of p.path ?? [{ dx: 0 }]) {
+      if (Math.abs(p.x + q.dx) + p.hw > TRACK_W / 2 + 1e-9) throw new Error(`row: ${p.kind} leaves the track`);
+    }
+  }
+  if (zone !== undefined && !zones[zone]) throw new Error(`row: zone ${zone}, not one of ${Object.keys(zones).join(', ')}`);
   const lo = GAP.min * tighten, hi = GAP.max * tighten;
   if (!(gap >= lo - 1e-9 && gap <= hi + 1e-9)) throw new Error(`row: gap ${gap} outside ${lo.toFixed(1)} to ${hi.toFixed(1)}`);
 }
 
-// The boxes a row is made of, in track coordinates: centre (s, x, h) and half sizes.
-function boxes(s, lanes) {
-  const out = [];
-  for (const [l, { kind, h }] of Object.entries(lanes)) {
-    const lx = (LANES.indexOf(l) - 1) * LANE_X;
-    if (kind === 'bar') {
-      // Full lane wide on thin posts at the lane edges, so a ducking hops squeezes through.
-      const { bottom, t } = KIND.bar, bw = LANE_X - 0.1;
-      for (const px of [-bw / 2 + 0.08, bw / 2 - 0.08]) out.push({ kind: 'post', s, x: lx + px, h: bottom / 2, hw: 0.08, hh: bottom / 2, hd: 0.08 });
-      out.push({ kind, s, x: lx, h: bottom + t / 2, hw: bw / 2, hh: t / 2, hd: 0.5 });
-    } else {
-      out.push({ kind, s, x: lx, h: h / 2, hw: (LANE_X - 0.4) / 2, hh: h / 2, hd: (kind === 'wall' ? 1.6 : 2.2) / 2 });
-    }
+// The zone the hops is in, if any.
+function zoneAt(world, b) {
+  const { rows } = world, first = rows[0]?.id ?? 0;
+  for (let i = Math.max(0, b.row - first - 2); i < rows.length; i++) {
+    const r = rows[i];
+    if (r.s - b.s > ZONE_REACH) break;
+    if (r.zone && b.s >= r.s - r.zone.before && b.s <= r.s + r.zone.after) return r.zone;
   }
-  return out;
+  return null;
 }
 
 // --- the hops ------------------------------------------------------------------------------------
@@ -230,8 +317,9 @@ function boxes(s, lanes) {
 // row to clear and the next gate to fly through.
 const hops = () => ({ t: 0, s: START, speed: SPEED.start, boost: 0, x: 0, xv: 0, h: HOVER, hv: 0, lane: 1, airborne: false, hover: HOVER, duckT: 0, squash: 0, duckAmt: 0, sx: 1, sy: 1, sz: 1, charge: 0, row: 0, pad: 0 });
 
-function steer(b, move, events) {
+function steer(b, move, world, events) {
   const before = b.lane;
+  if ((move === 'left' || move === 'right') && zoneAt(world, b)?.mirror) move = move === 'left' ? 'right' : 'left';
   if (move === 'left') b.lane = Math.max(0, b.lane - 1);
   if (move === 'right') b.lane = Math.min(2, b.lane + 1);
   if (move === 'up' && !b.airborne) {
@@ -246,19 +334,20 @@ function steer(b, move, events) {
 // One step of flight, up to collisions: speed, the lateral spring, height under magnetic gravity
 // (where the track curves away beneath the hops faster than gravity pulls, a crest, it lifts off;
 // where it curves into it, a dip or a loop, it is pressed down), the body's squash, speed gates.
+// A zone scales gravity and grip.
 function move(b, world, events) {
-  const dt = DT;
+  const dt = DT, zone = zoneAt(world, b), grip = zone?.grip ?? 1;
   b.t += dt;
   b.speed = Math.min(SPEED.max, b.speed + SPEED.gain * dt);
   b.boost = Math.max(0, b.boost - BOOST.decay * dt);
   b.charge = Math.min(1, b.charge + CHARGE.perSecond * dt);
   const v = b.speed + b.boost;
   b.s += v * dt;
-  b.xv += (((b.lane - 1) * LANE_X - b.x) * SPRING.k - b.xv * SPRING.c) * dt;
+  b.xv += (((b.lane - 1) * LANE_X - b.x) * SPRING.k * grip - b.xv * SPRING.c * Math.sqrt(grip)) * dt;
   b.x += b.xv * dt;
   b.duckT = Math.max(0, b.duckT - dt);
   b.hover = lerp(b.hover, b.duckT > 0 ? DUCK.hover : HOVER, Math.min(1, dt * 18));
-  b.hv += (-GRAVITY - v * v * world.track.pitchAt(b.s)) * dt;
+  b.hv += (-GRAVITY * (zone?.gravity ?? 1) - v * v * world.track.pitchAt(b.s)) * dt;
   b.h += b.hv * dt;
   if (b.h <= b.hover) {
     if (b.airborne && -b.hv > 4) { b.squash = Math.min(-b.hv / 25, 0.45); events?.push({ type: 'land', hv: b.hv }); }
@@ -281,8 +370,8 @@ function move(b, world, events) {
 }
 
 // Collisions, after the step: touch and you crash, miss and you pass. The hops is an ellipsoid
-// (squashed when it ducks or lands), each obstacle its own box, posts included; the test is exact.
-// Returns the row and box hit, if any.
+// (squashed when it ducks or lands), each part its own box where it stands for this hops, posts
+// included; the test is exact. Returns the row and the index of the part hit, if any.
 function collide(b, world, events) {
   const { rows } = world, first = rows[0]?.id ?? 0;
   const cs = b.s - CENTRE, rx = HULL.x * b.sx, ry = HULL.y * b.sy, rz = HULL.z * b.sz;
@@ -290,11 +379,12 @@ function collide(b, world, events) {
     const r = rows[i];
     if (r.s - cs >= 4) break;
     if (Math.abs(r.s - cs) < 4) {
-      for (const u of r.boxes) {
+      for (let k = 0; k < r.parts.length; k++) {
+        const u = boxAt(r.parts[k], r.s - b.s);
         const dz = (Math.max(u.s - u.hd, Math.min(cs, u.s + u.hd)) - cs) / rz;
         const dx = (Math.max(u.x - u.hw, Math.min(b.x, u.x + u.hw)) - b.x) / rx;
         const dy = (Math.max(u.h - u.hh, Math.min(b.h, u.h + u.hh)) - b.h) / ry;
-        if (dx * dx + dy * dy + dz * dz < 1) return { row: r, box: u };
+        if (dx * dx + dy * dy + dz * dz < 1) return { row: r, part: k };
       }
     }
     if (i === b.row - first && cs - r.s > 1.2 + rz) {
@@ -344,7 +434,7 @@ function witness(frontier, row, world, width) {
     for (const b of open) {
       for (const choice of choices(b, row)) {
         const c = { ...b };
-        steer(c, choice);
+        steer(c, choice, world);
         let alive = true;
         for (let k = 0; k < WITNESS.decide && c.row <= row.id; k++) {
           move(c, world);
@@ -361,19 +451,23 @@ function witness(frontier, row, world, width) {
 }
 
 // --- a run ---------------------------------------------------------------------------------------
-// createRun({ seed, maker }): the track exists at once; tick() flies one step. The hops is flown by
+// createRun({ seed, maker, kinds, zones }): the track exists at once; tick() flies one step. kinds
+// and zones add to KINDS and ZONES for this run's maker, each checked against BOUNDS. The hops is flown by
 // steer() (a key press) or decide() (a pilot's answer: jumps and ducks armed against the next row).
 // What happens in a step (jump, land, lane, gate, clear, crash, a row or gate dropped behind) is
 // pushed to run.events for the page to draw; it empties them. Rows are placed before they come into
 // view: tick() places what the next AHEAD metres need, prepare(ms) places up to PLACE metres ahead
 // within a time budget, so the witness's work is spread over frames. A row is the same whenever it
 // is placed. run.inView() lists the rows and gates in view.
-export function createRun({ seed, maker = procedural, width = WITNESS.width }) {
+export function createRun({ seed, maker = procedural, kinds: extraKinds = {}, zones: extraZones = {}, width = WITNESS.width }) {
+  for (const [name, k] of Object.entries(extraKinds)) checkKind(name, k);
+  for (const [name, z] of Object.entries(extraZones)) checkZone(name, z);
+  const kinds = { ...KINDS, ...extraKinds }, zones = { ...ZONES, ...extraZones };
   const track = createTrack(stream(seed, 1)), rowRng = stream(seed, 2), padRng = stream(seed, 3);
   const world = { track, rows: [], pads: [] };
   const events = [];
   const run = {
-    seed, track, rows: world.rows, pads: world.pads, events,
+    seed, track, kinds, zones, rows: world.rows, pads: world.pads, events,
     hops: hops(), crash: null, armed: null, pushed: 0, redrawn: 0,
     get distance() { return run.hops.s - START; },
     get flightMs() { return run.hops.t * 1000; },
@@ -402,8 +496,9 @@ export function createRun({ seed, maker = procedural, width = WITNESS.width }) {
       // Rows close in with the distance flown when they come into view, AHEAD metres before them.
       const tighten = Math.max(GAP.floor, 1 - Math.max(0, rs - AHEAD - START) / GAP.over);
       const proposal = maker({ rng: rowRng, at: rs, tighten, run });
-      checkProposal(proposal, tighten);
-      const row = { id: rowId, s: rs, lanes: Object.fromEntries(Object.entries(proposal.lanes).map(([l, { kind }]) => [l, kind])), boxes: boxes(rs, proposal.lanes) };
+      checkProposal(proposal, tighten, kinds, zones);
+      const zone = proposal.zone && { name: proposal.zone, ...zones[proposal.zone] };
+      const row = { id: rowId, s: rs, lanes: Object.fromEntries(Object.entries(proposal.lanes).map(([l, { kind }]) => [l, kind])), parts: partsOf(rs, proposal.lanes, kinds), zone };
       world.rows.push(row);
       const past = witness(frontier, row, world, width);
       if (!past.length) { world.rows.pop(); run.redrawn++; continue; }
@@ -413,7 +508,7 @@ export function createRun({ seed, maker = procedural, width = WITNESS.width }) {
     }
   }
 
-  run.steer = (choice) => { if (!run.crash) steer(run.hops, choice, events); };
+  run.steer = (choice) => { if (!run.crash) steer(run.hops, choice, world, events); };
   // A pilot's answer. A jump or a duck is armed against the next row and fires LEAD seconds before
   // it, so the hops tops its arc, or is lowest, as it crosses; a lane change applies at once.
   run.decide = (choice) => {
@@ -423,12 +518,31 @@ export function createRun({ seed, maker = procedural, width = WITNESS.width }) {
   };
   const inView = (list) => list.filter((o) => o.s < run.hops.s + AHEAD);
   run.inView = () => ({ rows: inView(world.rows), pads: inView(world.pads) });
-  // What a pilot is told: its lane, whether it is in the air, and the rows ahead in view.
-  run.view = () => ({
-    lane: LANES[run.hops.lane],
-    airborne: run.hops.airborne,
-    ahead: inView(world.rows).filter((r) => r.s > run.hops.s + 0.8).map((r) => ({ distance: r.s - run.hops.s, lanes: r.lanes })),
-  });
+  run.zone = () => zoneAt(world, run.hops);
+  // What a pilot is told: its lane, whether it is in the air, the zone it is in, the rows ahead in
+  // view (their kinds by lane, their zone, where each part stands now), and what each kind and zone
+  // named there is.
+  run.view = () => {
+    const b = run.hops, ahead = inView(world.rows).filter((r) => r.s > b.s + 0.8), here = zoneAt(world, b);
+    const describe = {};
+    for (const r of ahead) {
+      for (const kind of Object.values(r.lanes)) describe[kind] = kinds[kind].describe;
+      if (r.zone) describe[r.zone.name] = r.zone.describe;
+    }
+    if (here) describe[here.name] = here.describe;
+    return {
+      lane: LANES[b.lane],
+      airborne: b.airborne,
+      zone: here?.name ?? null,
+      ahead: ahead.map((r) => ({
+        distance: r.s - b.s,
+        lanes: r.lanes,
+        zone: r.zone?.name ?? null,
+        parts: r.parts.map((p) => { const u = boxAt(p, r.s - b.s); return { kind: p.kind, x: u.x, bottom: u.h - u.hh, top: u.h + u.hh, width: u.hw * 2 }; }),
+      })),
+      describe,
+    };
+  };
   run.prepare = (ms) => {
     const until = performance.now() + ms;
     while (nextRowAt < run.hops.s + PLACE && performance.now() < until) placeRow();
@@ -442,7 +556,7 @@ export function createRun({ seed, maker = procedural, width = WITNESS.width }) {
     if (run.armed) {
       const { move: armed, row } = run.armed;
       if (b.row > row.id) run.armed = null;
-      else if ((row.s - b.s) / Math.max(b.speed + b.boost, 1) <= LEAD[armed]) { run.armed = null; steer(b, armed, events); }
+      else if ((row.s - b.s) / Math.max(b.speed + b.boost, 1) <= LEAD[armed]) { run.armed = null; steer(b, armed, world, events); }
     }
     run.crash = collide(b, world, events);
     if (run.crash) events.push({ type: 'crash', ...run.crash });

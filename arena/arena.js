@@ -1,7 +1,11 @@
 // Arena: pilots fly Hops Run headless on the game's own simulation (game/public/sim.js), each over
 // the same seeds, so every pilot meets the same tracks.
 //
-//   node arena/arena.js --pilots claude-bot,claude-fable-bot,kumo [--runs 30] [--seed 1] [--max 100000] [--json]
+//   node arena/arena.js --pilots claude-bot,claude-fable-bot,kumo [--maker odd] [--runs 30] [--seed 1] [--max 100000] [--json]
+//
+// A track maker proposes the rows: `procedural` is the game's own, any other is
+// arena/makers/<name>.js, exporting the maker as default and, optionally, `kinds` and `zones` of its
+// own (sim.js checks them against its bounds, and every row against the witness).
 //
 // A pilot is a bot (bots/<name>/pilot.js, run in a sandbox whose clock is the run's own) or a
 // model decider (semif, kumo, jev, clef), with the settings pilot/runner.js reads: SEMIF_URL,
@@ -13,12 +17,13 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import vm from 'node:vm';
-import { createRun, DT } from '../game/public/sim.js';
+import { createRun, procedural, DT } from '../game/public/sim.js';
 import { DECIDERS, createDeciders } from '../pilot/deciders.js';
 
 const { values: args } = parseArgs({
   options: {
     pilots: { type: 'string' },
+    maker: { type: 'string', default: 'procedural' },
     runs: { type: 'string', default: '30' },
     seed: { type: 'string', default: '1' },
     max: { type: 'string', default: '100000' },
@@ -29,6 +34,16 @@ if (!args.pilots) throw new Error('--pilots: comma-separated bots (bots/<name>) 
 const RUNS = Number(args.runs), SEED = Number(args.seed), MAX = Number(args.max);
 const FRAME = Math.round(1 / 60 / DT); // steps per 60 Hz frame
 const BETWEEN_RUNS_MS = 5000; // a bot's clock moves on this much between runs, as on the page
+
+async function loadMaker(name) {
+  if (name === 'procedural') return { maker: procedural };
+  if (!/^[\w-]+$/.test(name)) throw new Error(`--maker ${name}: a name from arena/makers/`);
+  const file = new URL(`makers/${name}.js`, import.meta.url);
+  if (!existsSync(file)) throw new Error(`--maker ${name}: no arena/makers/${name}.js`);
+  const m = await import(file);
+  return { maker: m.default, kinds: m.kinds, zones: m.zones };
+}
+const MAKER = await loadMaker(args.maker);
 
 // A bot is the browser script it is on the page, run in its own context with the run's clock.
 function loadBot(name) {
@@ -59,7 +74,7 @@ function loadPilot(name) {
 }
 
 async function fly(pilot, seed) {
-  const run = createRun({ seed }), base = pilot.clock?.ms ?? 0;
+  const run = createRun({ seed, ...MAKER }), base = pilot.clock?.ms ?? 0;
   let pending = null, step = 0;
   while (!run.crash && run.distance < MAX) {
     if (!pending && step % FRAME === 0) {
@@ -92,9 +107,9 @@ for (const name of args.pilots.split(',').map((p) => p.trim())) {
   if (!args.json) process.stderr.write('\n');
 }
 
-if (args.json) console.log(JSON.stringify({ seeds: [SEED, SEED + RUNS - 1], max: MAX, results }, null, 2));
+if (args.json) console.log(JSON.stringify({ maker: args.maker, seeds: [SEED, SEED + RUNS - 1], max: MAX, results }, null, 2));
 else {
-  console.log(`seeds ${SEED} to ${SEED + RUNS - 1}${results.some((r) => r.capped) ? `, runs capped at ${MAX} m` : ''}`);
+  console.log(`maker ${args.maker}, seeds ${SEED} to ${SEED + RUNS - 1}${results.some((r) => r.capped) ? `, runs capped at ${MAX} m` : ''}`);
   console.log(['pilot', 'median', 'mean', 'p90', 'best', 'capped'].map((h) => h.padStart(h === 'pilot' ? 18 : 8)).join(''));
   for (const r of results) console.log(r.pilot.padStart(18) + [r.median, r.mean, r.p90, r.best, r.capped].map((v) => String(v).padStart(8)).join(''));
 }
