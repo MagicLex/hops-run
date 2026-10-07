@@ -1,7 +1,8 @@
-// Hops Run: Express server for the game. Serves the page with the leaderboard rendered in the
-// initial HTML, the three.js scene, and the leaderboard API backed by Postgres. Every run on the
-// board carries its pilot (a player, or a model pilot: jev, qwen, kumo, clef) and the model
-// behind it, so players and decision models race on one board.
+// Hops Run: Express server for the game. Serves the page with the leaderboards rendered in the
+// initial HTML, the three.js scene, and the leaderboard API backed by Postgres. Every run carries
+// its pilot (a player, a model pilot: jev, qwen, kumo, clef, or a bot from the repo's bots/) and the
+// model behind it, and the edition it was flown on: classic, or one a designer published. Three
+// boards per edition: players and model pilots, bots, and the editions themselves.
 //
 // Settings (env):
 //   PORT              listen port
@@ -24,7 +25,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import pg from 'pg';
-import { SPEED, BOOST, PAD_GAP } from './public/sim.js';
+import { SPEED, BOOST, PAD_GAP, CLASSIC, checkEdition } from './public/sim.js';
 
 // The game version is package.json's: shown in the HUD and stored with every run, so a change to
 // the track or physics never mixes incomparable runs without trace.
@@ -44,8 +45,10 @@ const cfg = {
 if (!cfg.port || !cfg.databaseUrl || !(cfg.maxPlayers > 0)) throw new Error('missing setting: PORT, DATABASE_URL and MAX_PLAYERS are required');
 
 // Model pilots, as allowed by the table. A model pilot posts every run it flies, and each run
-// ranks on the board like a player's.
+// ranks on the board like a player's. Bots (pilot 'bot') post with the same token, from the arena,
+// and rank on a board of their own.
 const PILOTS = ['jev', 'qwen', 'kumo', 'clef'];
+const BOT = 'bot';
 
 // The pool lives for the process and is closed on shutdown.
 const db = new pg.Pool({ connectionString: cfg.databaseUrl, max: 5 });
@@ -74,8 +77,19 @@ await db.query(`
   ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_pilot_check;
   -- The SemIf pilot on Qwen was named after its project (jevworks) until v1.11.0.
   UPDATE runs SET pilot = 'qwen', name = 'qwen' WHERE pilot = 'jevworks';
-  ALTER TABLE runs ADD CONSTRAINT runs_pilot_check CHECK (pilot IN (${['player', ...PILOTS].map((p) => `'${p}'`).join(', ')}));
+  ALTER TABLE runs ADD CONSTRAINT runs_pilot_check CHECK (pilot IN (${['player', BOT, ...PILOTS].map((p) => `'${p}'`).join(', ')}));
+  CREATE TABLE IF NOT EXISTS editions (
+    slug         text PRIMARY KEY,
+    spec         jsonb NOT NULL,
+    designer     text NOT NULL,
+    published_at timestamptz NOT NULL DEFAULT now()
+  );
+  ALTER TABLE runs ADD COLUMN IF NOT EXISTS edition text NOT NULL DEFAULT 'classic';
+  CREATE INDEX IF NOT EXISTS runs_edition_distance ON runs (edition, distance_m DESC, created_at);
 `);
+// Classic is the game's own edition (public/sim.js), kept in step with it.
+await db.query(`INSERT INTO editions (slug, spec, designer, published_at) VALUES ('classic', $1, 'Hops Run', 'epoch')
+  ON CONFLICT (slug) DO UPDATE SET spec = EXCLUDED.spec`, [CLASSIC]);
 
 // A player's run is timed by the server: at takeoff the page asks for a run key, and the server
 // records when. The run posted with that key may last no longer than the time since its takeoff,
@@ -95,33 +109,44 @@ const SUBMIT = { perMinute: 6 }, STARTS = { perMinute: 30, keepHours: 24 };
 // already recorded.
 const RUN_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const findRun = async (runKey) => (await db.query(`SELECT id, distance_m, created_at FROM runs WHERE run_key = $1`, [runKey])).rows[0];
-async function recordRun({ name, pilot, model, distance, duration, client, runKey }) {
+async function recordRun({ name, pilot, model, distance, duration, client, runKey, edition }) {
   const { rows: [run] } = await db.query(
-    `INSERT INTO runs (name, pilot, model, distance_m, duration_ms, client, game_version, run_key) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO runs (name, pilot, model, distance_m, duration_ms, client, game_version, run_key, edition) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (run_key) DO NOTHING RETURNING id, distance_m, created_at`,
-    [name, pilot, model, distance, duration, client, VERSION, runKey],
+    [name, pilot, model, distance, duration, client, VERSION, runKey, edition],
   );
   return run ?? findRun(runKey); // a concurrent post of the same key won the insert
 }
 
-// The top runs, ranked; then the best player and each model pilot missing from them, with its best
-// run and that run's place, so players and every model stay on the board whoever leads it. Each
-// model pilot's first row carries how many runs it has flown.
-async function board() {
+// Editions: classic, and the live one (the latest a designer published), as the page loads them.
+const SLUG = /^[a-z0-9][a-z0-9.:-]{0,39}$/;
+async function editions() {
+  const { rows } = await db.query(`SELECT slug, spec, designer, published_at FROM editions WHERE slug = 'classic' OR published_at = (SELECT max(published_at) FROM editions WHERE slug <> 'classic')`);
+  return { classic: rows.find((e) => e.slug === 'classic'), live: rows.find((e) => e.slug !== 'classic') ?? null };
+}
+const editionOf = async (slug) => (await db.query(`SELECT slug, spec, designer, published_at FROM editions WHERE slug = $1`, [slug])).rows[0];
+
+// A board of runs on one edition: the top runs, ranked. On the players' board (players and model
+// pilots) the best player and each model pilot missing from the top follow, with its best run and
+// that run's place, so players and every model stay on it whoever leads; each model pilot's first
+// row carries how many runs it has flown there. The bots' board is the bots' runs alone.
+async function board(edition, bots = false) {
+  const who = bots ? `pilot = '${BOT}'` : `pilot <> '${BOT}'`;
   const { rows } = await db.query(
-    `SELECT name, pilot, model, distance_m, game_version, created_at FROM runs ORDER BY distance_m DESC, created_at ASC LIMIT $1`,
-    [cfg.boardSize],
+    `SELECT name, pilot, model, distance_m, game_version, created_at FROM runs WHERE edition = $1 AND ${who} ORDER BY distance_m DESC, created_at ASC LIMIT $2`,
+    [edition, cfg.boardSize],
   );
   const top = rows.map((r, i) => ({ ...r, rank: i + 1 }));
+  if (bots) return top;
   const missing = ['player', ...PILOTS].filter((p) => !top.some((r) => r.pilot === p));
   const { rows: below } = await db.query(
-    `SELECT b.*, 1 + (SELECT count(*) FROM runs o WHERE o.distance_m > b.distance_m OR (o.distance_m = b.distance_m AND o.created_at < b.created_at))::int AS rank
+    `SELECT b.*, 1 + (SELECT count(*) FROM runs o WHERE o.edition = $2 AND o.${who} AND (o.distance_m > b.distance_m OR (o.distance_m = b.distance_m AND o.created_at < b.created_at)))::int AS rank
      FROM unnest($1::text[]) AS p(pilot) CROSS JOIN LATERAL
-       (SELECT name, pilot, model, distance_m, game_version, created_at FROM runs WHERE runs.pilot = p.pilot ORDER BY distance_m DESC, created_at LIMIT 1) b
+       (SELECT name, pilot, model, distance_m, game_version, created_at FROM runs WHERE runs.pilot = p.pilot AND runs.edition = $2 ORDER BY distance_m DESC, created_at LIMIT 1) b
      ORDER BY rank`,
-    [missing],
+    [missing, edition],
   );
-  const { rows: counts } = await db.query(`SELECT pilot, count(*)::int AS runs FROM runs WHERE pilot = ANY($1) GROUP BY pilot`, [PILOTS]);
+  const { rows: counts } = await db.query(`SELECT pilot, count(*)::int AS runs FROM runs WHERE pilot = ANY($1) AND edition = $2 GROUP BY pilot`, [PILOTS, edition]);
   const flown = new Map(counts.map((c) => [c.pilot, c.runs]));
   return [...top, ...below.map((r) => ({ ...r, below: true }))].map((r) => {
     const runs = flown.get(r.pilot);
@@ -129,6 +154,17 @@ async function board() {
     return runs ? { ...r, pilotRuns: runs } : r;
   });
 }
+// The editions, newest first, each with how many runs were flown on it and the best.
+async function editionBoard() {
+  const { rows } = await db.query(
+    `SELECT e.slug, e.designer, e.published_at, count(r.id)::int AS runs, coalesce(max(r.distance_m), 0) AS best
+     FROM editions e LEFT JOIN runs r ON r.edition = e.slug GROUP BY e.slug ORDER BY e.published_at DESC LIMIT $1`,
+    [cfg.boardSize],
+  );
+  return rows;
+}
+const boards = async (edition) => ({ players: await board(edition), bots: await board(edition, true), editions: await editionBoard() });
+const boardsHtml = (b) => ({ players: boardRows(b.players), bots: boardRows(b.bots, 'No bot has flown this edition yet.'), editions: editionRows(b.editions) });
 
 // Muted preview of the pilot's live stream; a click opens the stream on YouTube. With a video id it plays
 // that broadcast, else the channel's current live. data-channel names the channel the stream goes to
@@ -201,9 +237,11 @@ const pilotTag = (r) => {
   return ` <i class="pilot">${esc(r.pilot)}${r.model ? ` · ${esc(r.model)}` : ''}${r.pilotRuns ? ` · ${r.pilotRuns} runs` : ''}${maker ? ` · by <a href="${maker.url}" target="_blank" rel="noopener">${maker.name}</a>` : ''}</i>`;
 };
 const boardRow = (r) => `<li data-rank="${r.rank}"${r.below ? ' class="below"' : ''}><span class="rank">${String(r.rank).padStart(2, '0')}</span><span class="who">${r.pilot === 'player' ? PERSON : ROBOT}${esc(r.name)}${r.pilot === 'player' ? '' : pilotTag(r)}</span><span class="dist">${r.distance_m} m <i class="ver">v${esc(r.game_version ?? '?')}</i></span></li>`;
-const boardRows = (rows) => rows.length
+const boardRows = (rows, empty = 'No runs yet. Be the first.') => rows.length
   ? rows.map((r, i) => `${r.below && !rows[i - 1]?.below ? '<li class="gap" aria-hidden="true">···</li>' : ''}${boardRow(r)}`).join('')
-  : '<li class="empty">No runs yet. Be the first.</li>';
+  : `<li class="empty">${esc(empty)}</li>`;
+// An edition's row, newest first: its name, its designer, when it was published, its runs and best.
+const editionRows = (rows) => rows.map((e, i) => `<li data-edition="${esc(e.slug)}"><span class="rank">${String(i + 1).padStart(2, '0')}</span><span class="who">${esc(e.slug)} <i class="pilot">by ${esc(e.designer)}${e.slug === 'classic' ? '' : ` · ${e.published_at.toISOString().slice(0, 10)}`} · ${e.runs} runs</i></span><span class="dist">${e.best} m</span></li>`).join('');
 
 // Shared links (Open Graph, X): the page's title and description, and public/og.jpg, a 1200x630
 // capture of the game.
@@ -224,7 +262,7 @@ const shareCard = (url) => `<link rel="canonical" href="${esc(url)}">
 <meta name="twitter:description" content="${esc(DESCRIPTION)}">
 <meta name="twitter:image" content="${esc(new URL('og.jpg', url).href)}">`;
 
-const page = (rows) => `<!doctype html>
+const page = ({ boards: b, editions: e, edition }) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -300,6 +338,13 @@ body.flying .reticle { opacity: 0.5; }
 .board li.empty { display: block; color: var(--dim); text-align: center; }
 .board li.gap { display: block; color: var(--dim); text-align: center; padding: 0 12px; line-height: 1.2; }
 .board .pilot a { color: inherit; pointer-events: auto; }
+.board[hidden] { display: none; }
+/* Track and board picks sit at the bottom centre, between the distance and the status. */
+.picks { position: fixed; left: 50%; bottom: var(--m); transform: translateX(-50%); display: grid; gap: 8px; justify-items: center; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; pointer-events: auto; }
+.tabs button { font: 500 12px 'Geist Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; padding: 5px 10px; border: 1px solid var(--rule); background: var(--paper); color: var(--dim); cursor: pointer; }
+.tabs button[aria-pressed="true"] { border-color: var(--fg); color: var(--fg); }
+.tabs.track button[aria-pressed="true"] { border-color: var(--green); color: var(--green); }
 .prompt .links { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .prompt .more { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border: 1px solid var(--green); border-radius: 999px; color: var(--green); background: var(--paper); text-decoration: none; pointer-events: auto; }
 .prompt .more svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
@@ -326,7 +371,7 @@ form.sign button { font: 500 13px 'Geist Mono', monospace; letter-spacing: 0.08e
 .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 .in-world .board, .in-world .board-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-@media (max-width: 640px) { .live { width: auto; } .live .screen { display: none; } .mind { width: 100%; } .row.bottom { flex-direction: column-reverse; align-items: stretch; } .right { text-align: left; justify-items: start; } form.sign input { width: 160px; } }
+@media (max-width: 640px) { .picks { position: static; transform: none; } .live { width: auto; } .live .screen { display: none; } .mind { width: 100%; } .row.bottom { flex-direction: column-reverse; align-items: stretch; } .right { text-align: left; justify-items: start; } form.sign input { width: 160px; } }
 </style>
 <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.js" } }</script>
 ${cfg.umami ? `<script defer src="${esc(cfg.umami.src)}" data-website-id="${esc(cfg.umami.id)}"></script>` : ''}
@@ -368,22 +413,36 @@ ${cfg.liveChannel || cfg.liveVideo ? liveCard({ channel: cfg.liveChannel, video:
       <button type="submit">Add to board</button>
     </form>
     <div class="label" id="seat" hidden></div>
-    <div class="keys label"><span><b>Space</b> Fly</span><span>Steer ← → · Jump ↑ · Duck ↓</span></div>
-    <div class="label board-label">Leaderboard</div>
-    <ol class="board" id="board">${boardRows(rows)}</ol>
+    <div class="keys label"><span><b>Space</b> Fly</span><span>Steer ← → · Jump ↑ · Duck ↓</span><span><b>T</b> Track · <b>B</b> Boards</span></div>
+    <div class="picks">
+    <div class="tabs track" id="track" role="group" aria-label="Track">
+      <button type="button" data-track="classic" aria-pressed="${edition.slug === 'classic'}">Classic</button>
+      ${e.live ? `<button type="button" data-track="live" aria-pressed="${edition.slug === e.live.slug}" title="${esc(e.live.spec.describe ?? '')}">Live · ${esc(e.live.slug)}</button>` : ''}
+    </div>
+    <div class="tabs" id="boards" role="group" aria-label="Leaderboards">
+      <button type="button" data-board="players" aria-pressed="true">Players</button>
+      <button type="button" data-board="bots" aria-pressed="false">Bots</button>
+      <button type="button" data-board="editions" aria-pressed="false">Editions</button>
+    </div>
+    </div>
+    <div class="label board-label" id="board-label">Leaderboard · ${esc(edition.slug)}</div>
+    <ol class="board" id="board" data-board="players">${boardRows(b.players)}</ol>
+    <ol class="board" data-board="bots" hidden>${boardRows(b.bots, 'No bot has flown this edition yet.')}</ol>
+    <ol class="board" data-board="editions" hidden>${editionRows(b.editions)}</ol>
     <div class="links">
       <a class="label more" href="https://github.com/MagicLex/hops-run" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Know more about the project</a>
       <a class="label more" href="https://github.com/MagicLex/hops-run/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Submit your bot</a>
     </div>
   </div>
 </div>
+<script type="application/json" id="editions">${JSON.stringify({ edition: edition.slug, classic: e.classic.spec, live: e.live && { slug: e.live.slug, spec: e.live.spec } }).replace(/</g, '\\u003c')}</script>
 <script type="module" src="game.js"></script>
 </body>
 </html>`;
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '2kb' }));
+app.use(express.json({ limit: '16kb' }));
 // Link-preview crawlers are logged with what they got, so a missing share card can be traced.
 const PREVIEW_BOTS = /LinkedInBot|facebookexternalhit|Facebot|WhatsApp|Slackbot|Twitterbot|TelegramBot|Discordbot|Googlebot|bingbot|Applebot/i;
 app.use((req, res, next) => {
@@ -391,8 +450,14 @@ app.use((req, res, next) => {
   if (bot) res.on('finish', () => console.log(`preview ${bot} ${req.method} ${req.originalUrl} ${res.statusCode}`));
   next();
 });
-app.get('/', async (_req, res, next) => {
-  try { res.type('html').send(page(await board())); } catch (e) { next(e); }
+// The edition a page or a board asks for: ?edition=classic (the default), live, or a slug.
+async function chosen(req) {
+  const e = await editions(), asked = String(req.query.edition ?? 'classic');
+  const edition = asked === 'live' ? e.live ?? e.classic : asked === 'classic' ? e.classic : SLUG.test(asked) ? await editionOf(asked) : null;
+  return { editions: e, edition: edition ?? e.classic };
+}
+app.get('/', async (req, res, next) => {
+  try { const { editions: e, edition } = await chosen(req); res.type('html').send(page({ boards: await boards(edition.slug), editions: e, edition })); } catch (err) { next(err); }
 });
 app.get('/health', async (_req, res) => {
   try { await db.query('SELECT 1'); sweep(Date.now()); res.json({ status: 'ok', version: VERSION, players: seated.size, waiting: waiting.size, maxPlayers: cfg.maxPlayers }); } catch { res.status(503).send('database unavailable'); }
@@ -421,8 +486,21 @@ app.post('/api/seat/leave', (req, res) => {
   sweep(Date.now());
   res.status(204).end();
 });
-app.get('/api/board', async (_req, res, next) => {
-  try { const runs = await board(); res.json({ runs, html: boardRows(runs) }); } catch (e) { next(e); }
+app.get('/api/board', async (req, res, next) => {
+  try { const { edition } = await chosen(req), b = await boards(edition.slug); res.json({ edition: edition.slug, runs: b.players, html: boardRows(b.players), boards: boardsHtml(b) }); } catch (e) { next(e); }
+});
+// A designer publishes an edition: it goes live at once. Checked against the game's own bounds.
+app.post('/api/editions', async (req, res, next) => {
+  try {
+    if (!isPilot(req)) return res.status(401).json({ error: 'Unknown pilot token.' });
+    const slug = String(req.body?.slug ?? ''), designer = String(req.body?.designer ?? '').slice(0, 64), spec = req.body?.spec;
+    if (!SLUG.test(slug) || slug === 'classic' || slug === 'live') return res.status(400).json({ error: 'Slug: lowercase letters, digits, dots, colons and dashes, not classic or live.' });
+    if (!designer) return res.status(400).json({ error: 'Designer: the model that made it.' });
+    try { checkEdition({ ...spec, name: slug }); } catch (e) { return res.status(400).json({ error: e.message }); }
+    const { rowCount } = await db.query(`INSERT INTO editions (slug, spec, designer) VALUES ($1, $2, $3) ON CONFLICT (slug) DO NOTHING`, [slug, { ...spec, name: slug }, designer]);
+    if (!rowCount) return res.status(409).json({ error: `Edition ${slug} exists.` });
+    res.status(201).json({ slug });
+  } catch (e) { next(e); }
 });
 // Takeoff: a run key for the run just started, timed from now.
 app.post('/api/runs/start', async (req, res, next) => {
@@ -443,15 +521,21 @@ app.post('/api/runs', async (req, res, next) => {
     if (distance > maxDistance(duration)) return res.status(400).json({ error: 'That run is further than the hops can fly in its time.' });
     const runKey = req.body?.runKey == null ? null : String(req.body.runKey);
     if (runKey !== null && !RUN_KEY.test(runKey)) return res.status(400).json({ error: 'Run key: a UUID.' });
-    const client = clientOf(req);
+    const client = clientOf(req), slug = String(req.body?.edition ?? 'classic');
+    const edition = SLUG.test(slug) && await editionOf(slug);
+    if (!edition) return res.status(400).json({ error: `Unknown edition ${slug}.` });
     if (req.headers.authorization) {
       if (!isPilot(req)) return res.status(401).json({ error: 'Unknown pilot token.' });
       const pilot = String(req.body?.pilot ?? ''), model = String(req.body?.model ?? '').slice(0, 64) || null;
-      if (!PILOTS.includes(pilot)) return res.status(400).json({ error: `Pilot: one of ${PILOTS.join(', ')}.` });
-      await recordRun({ name, pilot, model, distance, duration, client, runKey });
-      const { rows: [{ number, best }] } = await db.query(`SELECT count(*)::int AS number, max(distance_m) AS best FROM runs WHERE pilot = $1`, [pilot]);
-      const runs = await board();
-      return res.json({ number, best, runs, html: boardRows(runs) });
+      if (![...PILOTS, BOT].includes(pilot)) return res.status(400).json({ error: `Pilot: one of ${[...PILOTS, BOT].join(', ')}.` });
+      await recordRun({ name, pilot, model, distance, duration, client, runKey, edition: slug });
+      // A model pilot's tally counts its runs; a bot's, the bot's (by name).
+      const { rows: [{ number, best }] } = await db.query(
+        `SELECT count(*)::int AS number, max(distance_m) AS best FROM runs WHERE pilot = $1 AND edition = $2 AND ($1 <> '${BOT}' OR name = $3)`,
+        [pilot, slug, name],
+      );
+      const b = await boards(slug);
+      return res.json({ number, best, runs: b.players, html: boardRows(b.players), boards: boardsHtml(b) });
     }
     if (!runKey) return res.status(400).json({ error: 'This page is out of date. Reload it to put runs on the board.' });
     const known = await findRun(runKey);
@@ -461,13 +545,13 @@ app.post('/api/runs', async (req, res, next) => {
       if (duration > Number(start.elapsed_ms) + PHYSICS.clockSlackMs) return res.status(400).json({ error: 'That run lasted longer than the time since it took off.' });
       if (!allowed(client)) return res.status(429).json({ error: 'Too many runs from here in the last minute. Try again shortly.' });
     }
-    const run = known || await recordRun({ name, pilot: 'player', model: null, distance, duration, client, runKey });
+    const run = known || await recordRun({ name, pilot: 'player', model: null, distance, duration, client, runKey, edition: slug });
     const { rows: [{ rank }] } = await db.query(
-      `SELECT count(*)::int + 1 AS rank FROM runs WHERE distance_m > $1 OR (distance_m = $1 AND created_at < $2)`,
-      [run.distance_m, run.created_at],
+      `SELECT count(*)::int + 1 AS rank FROM runs WHERE edition = $3 AND pilot <> '${BOT}' AND (distance_m > $1 OR (distance_m = $1 AND created_at < $2))`,
+      [run.distance_m, run.created_at, slug],
     );
-    const runs = await board();
-    res.json({ id: run.id, rank, runs, html: boardRows(runs) });
+    const b = await boards(slug);
+    res.json({ id: run.id, rank, runs: b.players, html: boardRows(b.players), boards: boardsHtml(b) });
   } catch (e) { next(e); }
 });
 app.use('/vendor/three', express.static(fileURLToPath(new URL('node_modules/three/build/', import.meta.url)), { maxAge: '1d' }));

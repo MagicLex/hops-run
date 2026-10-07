@@ -29,10 +29,11 @@ PORT=8811 MAX_PLAYERS=200 DATABASE_URL=postgres://hops_run:...@localhost:5432/ho
 
 | Route | Meaning |
 | --- | --- |
-| `GET /` | The game, with the leaderboard rendered in the page |
-| `GET /api/board` | `{ runs, html }`: the top runs, and the same rows as rendered on the page |
+| `GET /?edition=` | The game, with its boards rendered in the page, on `classic` (default), `live` (the latest edition published) or an edition's slug |
+| `GET /api/board?edition=` | `{ edition, runs, html, boards }`: the players' board on that edition, and the three boards (`players`, `bots`, `editions`) as rendered on the page |
+| `POST /api/editions` | With `Authorization: Bearer <pilot token>`, `{ slug, designer, spec }` publishes an edition, live at once. The spec is checked with `public/sim.js` (`checkEdition`); 409 when the slug exists |
 | `POST /api/runs/start` | `{ runKey }`: the key of the run taking off. The server records the takeoff time |
-| `POST /api/runs` | `{ name, distance, durationMs, runKey }` adds a player's run, returns `{ id, rank, runs, html }`. A second post with the same key records nothing and returns the run already recorded, so the page retries safely through a restart. With `Authorization: Bearer <pilot token>` and `{ pilot, model }` it adds a model pilot's run and returns `{ number, best, runs, html }` |
+| `POST /api/runs` | `{ name, distance, durationMs, runKey }` adds a player's run, returns `{ id, rank, runs, html }`. A second post with the same key records nothing and returns the run already recorded, so the page retries safely through a restart. With `Authorization: Bearer <pilot token>` and `{ pilot, model }` it adds a model pilot's run, or a bot's (`pilot: bot`, from the arena), and returns `{ number, best, runs, html, boards }`. `edition` is the slug the run was flown on, `classic` by default |
 | `POST /api/seat` | `{}` joins, `{ id, active }` is the heartbeat. Returns `{ id, state, position, heartbeatMs }`, `state` one of `play`, `wait`, `gone` |
 | `POST /api/seat/leave` | `{ id }` frees the seat or the place in line |
 | `GET /health` | `{ status, version, players, waiting, maxPlayers }` when the database answers |
@@ -43,7 +44,7 @@ At most `MAX_PLAYERS` pages play at once; the others wait in arrival order and t
 
 Analytics: Umami (`analytics.hops.io`, website `Hops Run`) records page views and the events `run-start`, `crash` (`distance`), `board-submit` (`distance`, `rank`) and `queue-wait` (`position`).
 
-Every run carries a `pilot` (`player`, `jev`, `qwen`, `kumo`, `clef`) and a `model`, so decision models race on the same board. Players are `player`, marked with a person; a model pilot's first row also shows how many runs it has flown. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, qwen: SemIf, kumo: NVIDIA, clef: Cloudflare). The best player and each model pilot missing from the top runs are listed below them, each with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
+Every run carries its edition, a `pilot` (`player`, `jev`, `qwen`, `kumo`, `clef`, or `bot`) and a `model`. Each edition has three boards: players and model pilots, so decision models race players on the same board; bots, whose runs come from the [arena](../arena/README.md); and the editions, newest first, with their designer, runs and best. Players are `player`, marked with a person; a model pilot's first row also shows how many runs it has flown. A model pilot posts every run it flies, numbered, and each run ranks on the board like a player's, marked with a robot and credited to its maker (jev: TypeSafe, qwen: SemIf, kumo: NVIDIA, clef: Cloudflare). The best player and each model pilot missing from the top runs are listed below them, each with its best run and that run's place. The Jev pilot from earlier work is on the `jev-pilot` tag.
 
 ## Simulation
 
@@ -79,6 +80,8 @@ The game version is `version` in `package.json`, tagged `v<version>` in git. It 
 | Key | Move |
 | --- | --- |
 | `Space` | Fly |
+| `T` | Classic or the live edition, on the start and crash screens |
+| `B` | Players, bots or editions on the leaderboard |
 | `←` `→` or `A` `D` | Change lane: dodges a wall |
 | `↑` or `W` | Jump: clears a low block or a bar, spends the jump charge |
 | `↓` or `S` | Duck: squeezes under a bar |

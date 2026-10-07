@@ -51,10 +51,16 @@ scene.add(sun);
 // Visual noise (particles, grain, shake) draws from Math.random; the run from its seed. `run` is the
 // run on screen. `next` is the one flown when Space is pressed: the start and crash screens place
 // its rows ahead of time (sim.js prepare), so takeoff never waits for them.
+// The track is an edition: classic, or the live one a designer published; the server puts both in
+// the page, and which one the page opens on (its URL's ?edition).
 const fx = Math.random;
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const newSeed = () => (Math.random() * 2 ** 31) | 0;
-let run = createRun({ seed: newSeed() }), next = run;
+const EDITIONS = JSON.parse(document.getElementById('editions').textContent);
+let track = EDITIONS.live && EDITIONS.edition === EDITIONS.live.slug ? 'live' : 'classic';
+const edition = () => (track === 'live' ? EDITIONS.live.spec : EDITIONS.classic);
+const newRun = () => createRun({ seed: newSeed(), edition: edition() });
+let run = newRun(), next = run;
 const frameAt = (s, out) => run.track.frameAt(s, out);
 // World point at track coordinates.
 const at = (s, x, h, out = new THREE.Vector3()) => { const f = frameAt(s); return out.copy(f.p).addScaledVector(f.right, x).addScaledVector(f.up, h); };
@@ -412,7 +418,8 @@ const flash = document.querySelector('.flash');
 // --- the leaderboard in the world -----------------------------------------------------------------
 // A paper slab floating over the track. On the start and crash screens it hovers ahead of the hops;
 // once a run starts it stays put and the hops flies under it. Its face is drawn from the board the
-// server rendered into the page (#board): the HTML list stays the content, the slab is its view.
+// server rendered into the page (one list per board: players, bots, editions): the HTML lists stay
+// the content, the slab shows the one picked.
 const SLAB = { w: 16, h: 9, d: 0.6, ahead: 30, lift: 7 }; // bottom edge 2.5 m up: the hops (top 2.3 m) flies under // metres; lift is the centre above the track
 const slabCanvas = document.createElement('canvas');
 slabCanvas.width = 1600; slabCanvas.height = 900;
@@ -433,10 +440,10 @@ function drawSlab() {
   g.fillStyle = '#FCFBF8'; g.fillRect(0, 0, W, H);
   g.textBaseline = 'alphabetic';
   g.font = '500 38px "Geist Mono"'; g.letterSpacing = '6px'; g.fillStyle = '#8A867D';
-  g.fillText('LEADERBOARD', pad, pad + 30);
+  g.fillText(`${shownBoard.toUpperCase()} · ${edition().name.toUpperCase()}`, pad, pad + 30);
   g.textAlign = 'right'; g.fillText(document.querySelector('.hud .label b')?.textContent?.toUpperCase() ?? '', W - pad, pad + 30); g.textAlign = 'left';
   g.fillStyle = '#151513'; g.fillRect(pad, pad + 58, W - pad * 2, 4);
-  const items = [...document.querySelectorAll('#board li')];
+  const items = [...boardLists[shownBoard].querySelectorAll('li')];
   const rowH = (H - pad * 2 - 80) / Math.max(10, items.length);
   g.letterSpacing = '0px';
   items.forEach((li, i) => {
@@ -463,8 +470,37 @@ function drawSlab() {
   });
   slabTex.needsUpdate = true;
 }
+// The boards and the track, picked on the start and crash screens: B cycles the boards, T the track.
+const boardLists = Object.fromEntries([...document.querySelectorAll('ol.board')].map((ol) => [ol.dataset.board, ol]));
+const boardLabel = document.getElementById('board-label');
+let shownBoard = 'players';
+function showBoard(name) {
+  shownBoard = name;
+  for (const [n, ol] of Object.entries(boardLists)) ol.hidden = n !== name;
+  for (const b of document.querySelectorAll('#boards button')) b.setAttribute('aria-pressed', String(b.dataset.board === name));
+  drawSlab();
+}
+function fillBoards(html) {
+  for (const [n, h] of Object.entries(html)) boardLists[n].innerHTML = h;
+  boardLabel.textContent = `Leaderboard · ${edition().name}`;
+}
+async function refreshBoards() {
+  try {
+    const res = await fetch(`api/board?edition=${encodeURIComponent(edition().name)}`);
+    if (res.ok) fillBoards((await res.json()).boards);
+  } catch { /* offline: the boards stay as they are */ }
+}
+function setTrack(name) {
+  if (name === track || (name === 'live' && !EDITIONS.live) || mode === 'flying') return;
+  track = name;
+  for (const b of document.querySelectorAll('#track button')) b.setAttribute('aria-pressed', String(b.dataset.track === name));
+  next = newRun();
+  refreshBoards();
+}
+for (const b of document.querySelectorAll('#boards button')) b.addEventListener('click', () => showBoard(b.dataset.board));
+for (const b of document.querySelectorAll('#track button')) b.addEventListener('click', () => setTrack(b.dataset.track));
 document.fonts.load('500 48px "Geist Mono"').then(drawSlab, drawSlab);
-new MutationObserver(drawSlab).observe(document.getElementById('board'), { childList: true, subtree: true, attributes: true });
+for (const ol of Object.values(boardLists)) new MutationObserver(drawSlab).observe(ol, { childList: true, subtree: true, attributes: true });
 document.body.classList.add('in-world'); // the 3D slab now carries the board; the HTML list stays for no-JS and crawlers
 
 // --- state ---------------------------------------------------------------------------------------
@@ -525,7 +561,7 @@ function start() {
   if (seat.state !== 'play') return;
   analytics('run-start');
   showLive(false);
-  run = next ?? createRun({ seed: newSeed() }); next = null;
+  run = next ?? newRun(); next = null;
   resetScene();
   mode = 'flying';
   document.body.classList.add('flying');
@@ -550,8 +586,8 @@ function crash({ row, part, rule }) {
   flash.style.transition = 'none'; flash.style.opacity = '0.35';
   requestAnimationFrame(() => { flash.style.transition = 'opacity 0.9s ease-out'; flash.style.opacity = '0'; });
   ui.status.textContent = `Crashed at ${Math.round(run.distance)} m${rule ? ` · ${rule} rule` : ''}`; ui.status.className = 'label crash';
-  lastRun = { distance: Math.round(run.distance), durationMs: Math.round(run.flightMs), runKey };
-  next = createRun({ seed: newSeed() });
+  lastRun = { distance: Math.round(run.distance), durationMs: Math.round(run.flightMs), runKey, edition: run.edition.name };
+  next = newRun();
   analytics('crash', { distance: lastRun.distance });
   if (PILOT) finished(lastRun);
   setTimeout(() => {
@@ -600,6 +636,8 @@ addEventListener('keydown', (e) => {
   }
   if (mode !== 'flying') {
     if (e.code === 'Space') { e.preventDefault(); if (seat.state === 'gone') joinSeat(); else start(); }
+    if (e.code === 'KeyT') setTrack(track === 'live' ? 'classic' : 'live');
+    if (e.code === 'KeyB') { const names = Object.keys(boardLists); showBoard(names[(names.indexOf(shownBoard) + 1) % names.length]); }
     // After a crash, Enter puts the run on the board: straight away with a saved name, else via the field.
     if (e.code === 'Enter' && lastRun && !submitted && !form.hidden) { e.preventDefault(); if (nameInput.value.trim()) form.requestSubmit(); else nameInput.focus(); }
     return;
@@ -648,7 +686,7 @@ form.addEventListener('submit', async (e) => {
     const d = await postRun({ name, ...lastRun, runKey: key });
     submitted = true;
     analytics('board-submit', { distance: lastRun.distance, rank: d.rank });
-    boardEl.innerHTML = d.html;
+    fillBoards(d.boards);
     boardEl.querySelector(`li[data-rank="${d.rank}"]`)?.classList.add('you');
     const top = d.runs.filter((r) => !r.below).length;
     result.textContent = d.rank <= top ? `${lastRun.distance} m · rank ${d.rank}` : `${lastRun.distance} m · rank ${d.rank}, outside the top ${top}`;
@@ -746,7 +784,7 @@ async function finished(run) {
   try {
     const d = await window.hopsRunFinished({ ...run, runKey: await run.runKey });
     if (d.error) throw new Error(d.error);
-    boardEl.innerHTML = d.html;
+    fillBoards(d.boards);
     pilot.record = `run ${d.number} · best ${d.best} m`;
     result.textContent = `Run ${d.number} · ${run.distance} m · best ${d.best} m`;
     showPilot();
