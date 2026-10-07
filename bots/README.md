@@ -1,6 +1,6 @@
 # bots
 
-Two Hops Run pilots written by Claude models, each of which took first place on the live board at [game.hopsworks.ai](https://game.hopsworks.ai) on 6 and 7 October 2026.
+Two Hops Run pilots written by Claude models, each of which took first place on the live board at [game.hopsworks.ai](https://game.hopsworks.ai) on 6 and 7 October 2026. Their live runs now sit on the game's bots board, with the runs the [designer](../designer) posts for every edition. [`CONTRIBUTING.md`](../CONTRIBUTING.md) says how to submit one.
 
 | Bot | Written by | Live best | Folder |
 | --- | --- | --- | --- |
@@ -50,6 +50,6 @@ Two things cost `claude-fable-bot` runs live that the local harness did not show
 
 **Headless, in the arena.** `node arena/arena.js --pilots claude-bot,claude-fable-bot --runs 30` flies them on the game's simulation over fixed seeds; see the [arena](../README.md#arena).
 
-**From the browser, as a player.** Open the game, paste `pilot.js` into the console, then paste [`run-in-browser.js`](run-in-browser.js). It reloads the page with the pilot steering and flies run after run; set `NAME`, `BEAT` and `SUBMIT` at the top. Several tabs can fly at once, and they share the best posted so far through localStorage, so only a run that beats every other tab's is posted. Runs go through the public form, timed by the server from each run's key, so they appear as a player's. The live scores above were posted this way, as `manu claude-bot`, `claude-fable-bot` and `manu claude-fablebot` (the form allows 20 characters), so they are labelled as bots on the players' board.
+**From the browser, to watch.** Open the game, paste `pilot.js` into the console, then paste [`run-in-browser.js`](run-in-browser.js). It reloads the page with the pilot steering and flies run after run, in a background tab too. The live scores above were posted from it through the public form, as `manu claude-bot`, `claude-fable-bot` and `manu claude-fablebot`, before the game had a bots board; they were moved there on 7 October 2026. Posting a bot's runs through the players' form is no longer allowed, so the loader posts nothing; bots are ranked in the arena.
 
 The pilots answer in well under a millisecond.

@@ -3,18 +3,12 @@
 // 1. Open https://game.hopsworks.ai, open the console, paste the bot's pilot.js (it defines
 //    window.hopsRunDecide).
 // 2. Paste this file. It reloads the page in place with the pilot steering and flies run after
-//    run. A run that beats BEAT metres, and every best so far, is posted through the public form
-//    as NAME (set SUBMIT to false to only fly). Runs stay on the human path: the server times each
-//    one from its run key.
-//
-// Several tabs can fly at once, one instance each: the best posted so far is shared between them
-// through localStorage, so a tab only posts a run that beats everything the others posted.
+//    run, each distance kept in window.bot.runs. Nothing is posted: the players' board is for
+//    people flying by hand, and bots are ranked in the arena (CONTRIBUTING.md).
 //
 // The game normally runs on requestAnimationFrame, which Chrome pauses in a background tab. The
 // loop below steps the game at a fixed 60 fps clock that catches up to real time, one frame per
 // task, so the tabs can stay in the background.
-const NAME = 'manu claude-fablebot', BEAT = 20528, SUBMIT = true;
-
 if (typeof window.hopsRunDecide !== 'function') throw new Error('paste the pilot first: window.hopsRunDecide is missing');
 if (window.__botTimer) clearInterval(window.__botTimer); // a previous instance in this tab
 const [html, game] = await Promise.all([fetch('/', { cache: 'no-store' }).then((r) => r.text()), fetch('/game.js', { cache: 'no-store' }).then((r) => r.text())]);
@@ -55,26 +49,14 @@ const page = html
 if (!page.includes('DRIVE')) throw new Error('page rewrite failed');
 document.open(); document.write(page); document.close();
 
-// Fly again after each crash; post a run that beats BEAT and the best posted from any tab.
-window.bot = { runs: [], posted: [] };
+// Fly again after each crash, keeping its distance.
+window.bot = { runs: [] };
 const press = () => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }));
-const best = () => Math.max(BEAT, +(localStorage.getItem('botBest') || 0));
 let crashedAt = 0;
 window.__botTimer = setInterval(() => {
   const crash = document.querySelector('.label.crash')?.textContent.match(/Crashed at (\d+) m/);
   if (!crash) { crashedAt = 0; if (!document.body.classList.contains('flying')) press(); return; }
-  const distance = +crash[1];
-  if (!crashedAt) {
-    crashedAt = Date.now();
-    window.bot.runs.push(distance);
-    if (SUBMIT && distance > best()) {
-      localStorage.setItem('botBest', String(distance));
-      document.getElementById('name').value = NAME;
-      document.getElementById('sign').requestSubmit();
-      window.bot.posted.push({ distance, at: new Date().toISOString() });
-    }
-    return;
-  }
-  if (Date.now() - crashedAt < 2500) return; // time for the post to go through
-  document.activeElement?.blur(); crashedAt = 0; press();
+  if (!crashedAt) { crashedAt = Date.now(); window.bot.runs.push(+crash[1]); return; }
+  if (Date.now() - crashedAt < 2500) return; // time to see the crash
+  crashedAt = 0; press();
 }, 250);

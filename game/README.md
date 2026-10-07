@@ -1,6 +1,6 @@
 # Game
 
-Hops Run is a low-poly racer in the Hopsworks paper style. The hops flies a procedurally generated track (turns, side banks, corkscrews, loops, inverted sections) through obstacle rows. After a crash the player puts their name and distance on the leaderboard, which the start screen shows.
+Hops Run is a low-poly racer in the Hopsworks paper style. The hops flies a procedurally generated track (turns, side banks, corkscrews, loops, inverted sections) through obstacle rows. A run is flown on classic or on the day's live edition; after a crash the player puts their name and distance on that edition's board. The start screen shows the boards (players and model pilots, bots, editions) as a carousel of paper slabs over the track.
 
 Live at [game.hopsworks.ai](https://game.hopsworks.ai). `hopsworks.ai/run` redirects there.
 
@@ -81,7 +81,7 @@ The game version is `version` in `package.json`, tagged `v<version>` in git. It 
 | --- | --- |
 | `Space` | Fly |
 | `T` | Classic or the live edition, on the start and crash screens |
-| `B` | Players, bots or editions on the leaderboard |
+| `B` | Slides the leaderboards' carousel to the next board |
 | `←` `→` or `A` `D` | Change lane: dodges a wall |
 | `↑` or `W` | Jump: clears a low block or a bar, spends the jump charge |
 | `↓` or `S` | Duck: squeezes under a bar |
@@ -90,9 +90,9 @@ The game version is `version` in `package.json`, tagged `v<version>` in git. It 
 
 | Path | Role |
 | --- | --- |
-| `server.js` | Express server: the page with the leaderboard, the leaderboard API, seats, Postgres |
+| `server.js` | Express server: the page with its boards and editions, the boards and editions API, seats, Postgres |
 | `public/sim.js` | The simulation: track generator, rows and the witness, speed gates, the hops' physics and collisions |
-| `public/game.js` | three.js scene drawing a run: track, hops, thruster, obstacles, speed gates, crash, chase camera, leaderboard form |
+| `public/game.js` | three.js scene drawing a run: track, hops, thruster, obstacles, zones, speed gates, crash, chase camera, the leaderboards' carousel, leaderboard form |
 | `public/fonts/` | Geist and Geist Mono (OFL) |
 | `public/hw.svg` | Hopsworks mark |
 | `public/og.jpg` | Share card image, 1200x630, a capture of the game |

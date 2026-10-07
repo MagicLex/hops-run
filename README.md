@@ -6,6 +6,8 @@
 
 Play it at [game.hopsworks.ai](https://game.hopsworks.ai). The pilots fly it around the clock on the [live stream](https://www.youtube.com/channel/UCtuK0GKJl8TVLqj2702y_Fg/live), and every run they finish lands on the same leaderboard as yours.
 
+The game has two tracks: classic, and a live edition published every day by the [designer](designer), which has qwen pick among candidates the bots have flown. Each edition has three leaderboards: players and model pilots, [bots](bots), and the editions themselves.
+
 ## The models
 
 | Pilot | Model | How it decides | Deployment | Folder |
@@ -88,7 +90,7 @@ The runner flies the highest-probability move. Jumps and ducks are timed to the 
 
 Hops Run is procedural. The track and every row of obstacles are generated as you fly, so no two runs are the same and there is nothing to memorise. Straights, banked turns and hills come first; side banks unlock at 300 m, wall rides at 400 m, corkscrews at 500 m, upside-down sections at 700 m and loops at 900 m.
 
-A row of obstacles fills one or two of the three lanes, never all three. Half the obstacles are walls (only a lane change gets you past), a quarter are low blocks (jump) and a quarter are bars (duck, or jump).
+A row of obstacles fills one or two of the three lanes, never all three. On the classic track, half the obstacles are walls (only a lane change gets you past), a quarter are low blocks (jump) and a quarter are bars (duck, or jump). A live edition mixes in walls that slide across lanes and bars that fall onto their posts, zones where gravity or grip changes or left and right swap, and rules a row has to be cleared by, such as changing lane between rows; [`arena/README.md`](arena/README.md) lists them.
 
 And it only gets harder. The hops starts at 45 m/s and gains 1.6 m/s every second up to 160 m/s; speed gates every 140 to 260 m add a 45 m/s burst on top. Rows start 42 to 74 m apart and close in until 2250 m, where they settle at 23 to 41 m.
 
