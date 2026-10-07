@@ -1,11 +1,11 @@
 # bots
 
-Two Hops Run pilots written by Claude models, each of which took first place on the live board at [game.hopsworks.ai](https://game.hopsworks.ai) on 6 October 2026.
+Two Hops Run pilots written by Claude models, each of which took first place on the live board at [game.hopsworks.ai](https://game.hopsworks.ai) on 6 and 7 October 2026.
 
 | Bot | Written by | Live best | Folder |
 | --- | --- | --- | --- |
 | `claude-bot` | Claude Opus 5.5 | 12,381 m (5 live runs) | [`claude-bot/`](claude-bot) |
-| `claude-fable-bot` | Claude Fable 5.1 | 20,528 m (26 live runs) | [`claude-fable-bot/`](claude-fable-bot) |
+| `claude-fable-bot` | Claude Fable 5.1 | 30,400 m (49 live runs) | [`claude-fable-bot/`](claude-fable-bot) |
 
 Both are hand-written planners, not model inference: each Claude read `game.js`, worked out the physics, and wrote a decision function. They answer the same request the `qwen` and `kumo` pilots get, `jevworksDecide({ lane, airborne, ahead })`, and use nothing else from the game. So they are a different kind of entry from the models in this repo: a model that is told the rules in English against a program that knows the physics.
 
@@ -37,7 +37,10 @@ For comparison the README's figures for the model pilots on game v1.11.0: `kumo`
 Live runs, in order:
 
 - `claude-bot`: 3,217 · 3,204 · 6,403 · 3,501 · **12,381**
-- `claude-fable-bot`: 5,298 · 2,332 · 6,416 · 5,901 · 3,398 · 8,111 · 6,420 · 7,383 · 4,672 · 2,312 · 9,468 · 6,724 · 7,979 · 10,441 · 7,081 · 6,472 · 5,155 · 2,892 · 4,221 · 3,547 · 1,975 · 6,691 · 8,794 · 8,695 · 956 · **20,528**
+- `claude-fable-bot`, 6 October, one instance: 5,298 · 2,332 · 6,416 · 5,901 · 3,398 · 8,111 · 6,420 · 7,383 · 4,672 · 2,312 · 9,468 · 6,724 · 7,979 · 10,441 · 7,081 · 6,472 · 5,155 · 2,892 · 4,221 · 3,547 · 1,975 · 6,691 · 8,794 · 8,695 · 956 · **20,528**
+- `claude-fable-bot`, 7 October, four instances flying at once with the same code: 6,654 · 7,217 · 3,612 · 8,185 · 3,774 · 5,851 · 7,240 · 2,845 · 5,611 · 12,111 · 6,377 · 6,101 · 8,654 · 4,842 · 8,820 · 5,806 · 6,202 · 7,597 · 5,917 · 7,405 · 6,550 · 2,969 · **30,400**
+
+Over the 49 live runs the median is 6,377 m and 4 runs (8%) passed 12,381 m, in line with the local batch. The two records are the tail: a run that long is roughly a 1-in-25 to 1-in-50 event for this pilot, so it is a matter of flying enough runs, which is what the four instances were for.
 
 Two things cost `claude-fable-bot` runs live that the local harness did not show. Chrome pauses `requestAnimationFrame` in a background tab, which froze the game, and when a tab is visible but not focused it can drop to 30 fps, which makes jump timing coarser; `run-in-browser.js` steps the game on its own fixed clock so neither matters. The other is hills: the first version ducked under bars on crests and clipped them, and jumped in dips and fell short.
 
@@ -45,6 +48,6 @@ Two things cost `claude-fable-bot` runs live that the local harness did not show
 
 **As a pilot, through the runner.** Each `pilot.js` sets `window.jevworksDecide` and answers `{ pilot, model, moves, probabilities, forwardMs }`, the same contract the runner expects from the model pilots. Load it before `game.js` and the game flies it as a pilot, with its runs posted under the pilot's token.
 
-**From the browser, as a player.** Open the game, paste `pilot.js` into the console, then paste [`run-in-browser.js`](run-in-browser.js). It reloads the page with the pilot steering and flies run after run; set `NAME`, `BEAT` and `SUBMIT` at the top. Runs go through the public form, timed by the server from each run's key, so they appear as a player's. The live scores above were posted this way, with the names `manu claude-bot` and `claude-fable-bot`, so they are labelled as bots on the players' board.
+**From the browser, as a player.** Open the game, paste `pilot.js` into the console, then paste [`run-in-browser.js`](run-in-browser.js). It reloads the page with the pilot steering and flies run after run; set `NAME`, `BEAT` and `SUBMIT` at the top. Several tabs can fly at once, and they share the best posted so far through localStorage, so only a run that beats every other tab's is posted. Runs go through the public form, timed by the server from each run's key, so they appear as a player's. The live scores above were posted this way, as `manu claude-bot`, `claude-fable-bot` and `manu claude-fablebot` (the form allows 20 characters), so they are labelled as bots on the players' board.
 
 The pilots answer in well under a millisecond.
